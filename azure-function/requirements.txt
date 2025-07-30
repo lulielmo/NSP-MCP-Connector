@@ -1,0 +1,5 @@
+azure-functions==1.17.0
+mcp==1.0.0
+httpx==0.25.0
+tenacity==8.2.3
+python-dotenv==1.0.0 
