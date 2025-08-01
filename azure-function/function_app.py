@@ -42,14 +42,20 @@ class NSPMCPConnector:
             logger.error(f"Error calling local API: {str(e)}")
             raise
     
-    async def get_tickets(self, page: int = 1, page_size: int = 15, filters: Dict = None) -> Dict[str, Any]:
-        """Get tickets from NSP"""
+    async def get_tickets(self, page: int = 1, page_size: int = 15, filters: Dict = None, 
+                         sort_by: str = "CreatedDate", sort_direction: str = "desc", 
+                         ticket_types: List[str] = None) -> Dict[str, Any]:
+        """Get IT-related tickets from NSP with customizable sorting and type filtering"""
         data = {
             "page": page,
-            "page_size": page_size
+            "page_size": page_size,
+            "sort_by": sort_by,
+            "sort_direction": sort_direction
         }
         if filters:
             data["filters"] = filters
+        if ticket_types:
+            data["ticket_types"] = ticket_types
         
         return await self._call_local_api('/api/get_tickets', data=data)
     
@@ -57,21 +63,34 @@ class NSPMCPConnector:
         """Get specific ticket"""
         return await self._call_local_api(f'/api/get_ticket/{ticket_id}', method='GET')
     
-    async def create_ticket(self, ticket_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Create new ticket"""
-        return await self._call_local_api('/api/create_ticket', data=ticket_data)
+    async def create_ticket(self, ticket_data: Dict[str, Any], user_email: str = None) -> Dict[str, Any]:
+        """Create new ticket with user context"""
+        # Include user email in the request if provided
+        request_data = {
+            "ticket_data": ticket_data,
+            "user_email": user_email
+        }
+        return await self._call_local_api('/api/create_ticket', data=request_data)
     
-    async def update_ticket(self, ticket_id: int, updates: Dict[str, Any]) -> Dict[str, Any]:
-        """Update ticket"""
-        return await self._call_local_api(f'/api/update_ticket/{ticket_id}', method='PUT', data=updates)
+    async def update_ticket(self, ticket_id: int, updates: Dict[str, Any], user_email: str = None) -> Dict[str, Any]:
+        """Update ticket with user context"""
+        # Include user email in the request if provided
+        request_data = {
+            "updates": updates,
+            "user_email": user_email
+        }
+        return await self._call_local_api(f'/api/update_ticket/{ticket_id}', method='PUT', data=request_data)
     
-    async def search_entities(self, entity_type: str, query: str, page: int = 1, page_size: int = 15) -> Dict[str, Any]:
-        """Search among entities"""
+    async def search_entities(self, entity_type: str, query: str, page: int = 1, page_size: int = 15,
+                            sort_by: str = "CreatedDate", sort_direction: str = "Descending") -> Dict[str, Any]:
+        """Search among entities with customizable sorting"""
         data = {
             "entity_type": entity_type,
             "query": query,
             "page": page,
-            "page_size": page_size
+            "page_size": page_size,
+            "sort_by": sort_by,
+            "sort_direction": sort_direction
         }
         return await self._call_local_api('/api/search_entities', data=data)
     
@@ -86,6 +105,60 @@ class NSPMCPConnector:
     async def get_attachments(self, entity_type: str, entity_id: int) -> Dict[str, Any]:
         """Get attachments"""
         return await self._call_local_api(f'/api/get_attachments/{entity_type}/{entity_id}', method='GET')
+    
+    async def get_user_by_email(self, user_email: str) -> Dict[str, Any]:
+        """Get user information by email address"""
+        data = {"email": user_email}
+        return await self._call_local_api('/api/get_user_by_email', data=data)
+    
+    async def get_tickets_by_role(self, user_email: str, role: str = "customer", page: int = 1, page_size: int = 15,
+                                sort_by: str = "CreatedDate", sort_direction: str = "desc", 
+                                ticket_types: List[str] = None) -> Dict[str, Any]:
+        """Get IT-related tickets filtered by user role (customer or agent) with customizable sorting and type filtering"""
+        data = {
+            "user_email": user_email,
+            "role": role,
+            "page": page,
+            "page_size": page_size,
+            "sort_by": sort_by,
+            "sort_direction": sort_direction
+        }
+        if ticket_types:
+            data["ticket_types"] = ticket_types
+        return await self._call_local_api('/api/get_tickets_by_role', data=data)
+    
+    async def create_ticket_with_role(self, ticket_data: Dict[str, Any], user_email: str, role: str = "customer") -> Dict[str, Any]:
+        """Create ticket with proper user context based on role"""
+        data = {
+            "ticket_data": ticket_data,
+            "user_email": user_email,
+            "role": role
+        }
+        return await self._call_local_api('/api/create_ticket_with_role', data=data)
+    
+    async def update_ticket_with_role(self, ticket_id: int, updates: Dict[str, Any], user_email: str, role: str = "agent") -> Dict[str, Any]:
+        """Update ticket with proper user context based on role"""
+        data = {
+            "updates": updates,
+            "user_email": user_email,
+            "role": role
+        }
+        return await self._call_local_api(f'/api/update_ticket_with_role/{ticket_id}', method='PUT', data=data)
+    
+    async def get_tickets_by_status(self, status: str = "open", page: int = 1, page_size: int = 15,
+                                  sort_by: str = "CreatedDate", sort_direction: str = "desc",
+                                  ticket_types: List[str] = None) -> Dict[str, Any]:
+        """Get IT-related tickets filtered by status (open or closed) with customizable sorting and type filtering"""
+        data = {
+            "status": status,
+            "page": page,
+            "page_size": page_size,
+            "sort_by": sort_by,
+            "sort_direction": sort_direction
+        }
+        if ticket_types:
+            data["ticket_types"] = ticket_types
+        return await self._call_local_api('/api/get_tickets_by_status', data=data)
 
 # Global MCP connector instance
 nsp_connector = NSPMCPConnector()
@@ -94,7 +167,7 @@ nsp_connector = NSPMCPConnector()
 MCP_TOOLS = [
     {
         "name": "get_tickets",
-        "description": "Get tickets from NSP with pagination and filtering",
+        "description": "Get IT-related tickets from NSP with pagination, filtering, customizable sorting, and type filtering",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -111,8 +184,134 @@ MCP_TOOLS = [
                 "filters": {
                     "type": "object",
                     "description": "Filter criteria for tickets"
+                },
+                "sort_by": {
+                    "type": "string",
+                    "description": "Field to sort by (default: 'CreatedDate')",
+                    "default": "CreatedDate"
+                },
+                "sort_direction": {
+                    "type": "string",
+                    "description": "Sort direction: 'asc' or 'desc' (default: 'desc' for newest first)",
+                    "enum": ["asc", "desc"],
+                    "default": "desc"
+                },
+                "ticket_types": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "enum": ["Ticket", "ServiceOrderRequest", "Incident"]
+                    },
+                    "description": "Specific IT ticket types to include. If not specified, includes all IT types"
                 }
             }
+        }
+    },
+    {
+        "name": "get_tickets_by_role",
+        "description": "Get IT-related tickets filtered by user role (customer or agent) with customizable sorting and type filtering",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "user_email": {
+                    "type": "string",
+                    "description": "Email address of the user"
+                },
+                "role": {
+                    "type": "string",
+                    "description": "User role: 'customer' or 'agent'",
+                    "enum": ["customer", "agent"],
+                    "default": "customer"
+                },
+                "page": {
+                    "type": "integer",
+                    "description": "Page to fetch (default: 1)",
+                    "default": 1
+                },
+                "page_size": {
+                    "type": "integer",
+                    "description": "Number of tickets per page (default: 15)",
+                    "default": 15
+                },
+                "sort_by": {
+                    "type": "string",
+                    "description": "Field to sort by (default: 'CreatedDate')",
+                    "default": "CreatedDate"
+                },
+                "sort_direction": {
+                    "type": "string",
+                    "description": "Sort direction: 'asc' or 'desc' (default: 'desc' for newest first)",
+                    "enum": ["asc", "desc"],
+                    "default": "desc"
+                },
+                "ticket_types": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "enum": ["Ticket", "ServiceOrderRequest", "Incident"]
+                    },
+                    "description": "Specific IT ticket types to include. If not specified, includes all IT types"
+                }
+            },
+            "required": ["user_email"]
+        }
+    },
+    {
+        "name": "get_tickets_by_status",
+        "description": "Get IT-related tickets filtered by status (open or closed) with customizable sorting and type filtering",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "status": {
+                    "type": "string",
+                    "description": "Ticket status: 'open' for non-closed tickets or 'closed' for closed tickets",
+                    "enum": ["open", "closed"],
+                    "default": "open"
+                },
+                "page": {
+                    "type": "integer",
+                    "description": "Page to fetch (default: 1)",
+                    "default": 1
+                },
+                "page_size": {
+                    "type": "integer",
+                    "description": "Number of tickets per page (default: 15)",
+                    "default": 15
+                },
+                "sort_by": {
+                    "type": "string",
+                    "description": "Field to sort by (default: 'CreatedDate')",
+                    "default": "CreatedDate"
+                },
+                "sort_direction": {
+                    "type": "string",
+                    "description": "Sort direction: 'asc' or 'desc' (default: 'desc' for newest first)",
+                    "enum": ["asc", "desc"],
+                    "default": "desc"
+                },
+                "ticket_types": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "enum": ["Ticket", "ServiceOrderRequest", "Incident"]
+                    },
+                    "description": "Specific IT ticket types to include. If not specified, includes all IT types"
+                }
+            }
+        }
+    },
+    {
+        "name": "get_user_by_email",
+        "description": "Get user information by email address",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "user_email": {
+                    "type": "string",
+                    "description": "Email address to look up"
+                }
+            },
+            "required": ["user_email"]
         }
     },
     {
@@ -150,9 +349,49 @@ MCP_TOOLS = [
                 "category": {
                     "type": "string",
                     "description": "Category of the ticket"
+                },
+                "user_email": {
+                    "type": "string",
+                    "description": "Email of the user creating the ticket (optional, will use API account if not provided)"
                 }
             },
             "required": ["title", "description"]
+        }
+    },
+    {
+        "name": "create_ticket_with_role",
+        "description": "Create new ticket with proper user context based on role",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "title": {
+                    "type": "string",
+                    "description": "Title of the ticket"
+                },
+                "description": {
+                    "type": "string", 
+                    "description": "Description of the ticket"
+                },
+                "priority": {
+                    "type": "string",
+                    "description": "Priority (Low, Medium, High, Critical)"
+                },
+                "category": {
+                    "type": "string",
+                    "description": "Category of the ticket"
+                },
+                "user_email": {
+                    "type": "string",
+                    "description": "Email of the user creating the ticket"
+                },
+                "role": {
+                    "type": "string",
+                    "description": "User role: 'customer' or 'agent'",
+                    "enum": ["customer", "agent"],
+                    "default": "customer"
+                }
+            },
+            "required": ["title", "description", "user_email"]
         }
     },
     {
@@ -168,9 +407,41 @@ MCP_TOOLS = [
                 "updates": {
                     "type": "object",
                     "description": "Fields to update"
+                },
+                "user_email": {
+                    "type": "string",
+                    "description": "Email of the user updating the ticket (optional, will use API account if not provided)"
                 }
             },
             "required": ["ticket_id", "updates"]
+        }
+    },
+    {
+        "name": "update_ticket_with_role",
+        "description": "Update existing ticket with proper user context based on role",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "ticket_id": {
+                    "type": "integer",
+                    "description": "ID of the ticket to update"
+                },
+                "updates": {
+                    "type": "object",
+                    "description": "Fields to update"
+                },
+                "user_email": {
+                    "type": "string",
+                    "description": "Email of the user updating the ticket"
+                },
+                "role": {
+                    "type": "string",
+                    "description": "User role: 'customer' or 'agent'",
+                    "enum": ["customer", "agent"],
+                    "default": "agent"
+                }
+            },
+            "required": ["ticket_id", "updates", "user_email"]
         }
     },
     {
@@ -204,7 +475,7 @@ MCP_TOOLS = [
     },
     {
         "name": "get_entity_types",
-        "description": "Get available entity types from NSP",
+        "description": "Get available entity types in NSP",
         "inputSchema": {
             "type": "object",
             "properties": {}
@@ -218,7 +489,7 @@ MCP_TOOLS = [
             "properties": {
                 "entity_type": {
                     "type": "string",
-                    "description": "Entity type to get metadata for"
+                    "description": "Type of entity to get metadata for"
                 }
             },
             "required": ["entity_type"]
@@ -232,7 +503,7 @@ MCP_TOOLS = [
             "properties": {
                 "entity_type": {
                     "type": "string",
-                    "description": "Type of entity"
+                    "description": "Type of entity (e.g., Ticket)"
                 },
                 "entity_id": {
                     "type": "integer",
@@ -285,8 +556,27 @@ async def nsp_mcp_handler(req: func.HttpRequest) -> func.HttpResponse:
                     mimetype="application/json"
                 )
             
+            # Extract user information from Copilot context if available
+            # This might come from headers, context, or other sources depending on Copilot setup
+            user_email = None
+            
+            # Try to get user email from various possible sources
+            # 1. From request headers (if Copilot sets them)
+            user_email = req.headers.get('X-User-Email') or req.headers.get('User-Email')
+            
+            # 2. From arguments if explicitly provided
+            if not user_email and 'user_email' in arguments:
+                user_email = arguments.pop('user_email')
+            
+            # 3. From context if available in request data
+            if not user_email and 'context' in request_data:
+                context = request_data.get('context', {})
+                user_email = context.get('user_email') or context.get('user', {}).get('email')
+            
+            logger.info(f"Tool call: {tool_name}, User: {user_email or 'API account'}")
+            
             # Call appropriate method based on tool name
-            result = await call_tool(tool_name, arguments)
+            result = await call_tool(tool_name, arguments, user_email)
             
             return func.HttpResponse(
                 json.dumps({"result": result}),
@@ -308,7 +598,7 @@ async def nsp_mcp_handler(req: func.HttpRequest) -> func.HttpResponse:
             mimetype="application/json"
         )
 
-async def call_tool(tool_name: str, arguments: Dict[str, Any]) -> List[Dict[str, Any]]:
+async def call_tool(tool_name: str, arguments: Dict[str, Any], user_email: str = None) -> List[Dict[str, Any]]:
     """Call specific tool and return result"""
     
     try:
@@ -316,7 +606,36 @@ async def call_tool(tool_name: str, arguments: Dict[str, Any]) -> List[Dict[str,
             result = await nsp_connector.get_tickets(
                 page=arguments.get("page", 1),
                 page_size=arguments.get("page_size", 15),
-                filters=arguments.get("filters")
+                filters=arguments.get("filters"),
+                sort_by=arguments.get("sort_by", "CreatedDate"),
+                sort_direction=arguments.get("sort_direction", "desc"),
+                ticket_types=arguments.get("ticket_types")
+            )
+        
+        elif tool_name == "get_tickets_by_role":
+            result = await nsp_connector.get_tickets_by_role(
+                user_email=arguments["user_email"],
+                role=arguments.get("role", "customer"),
+                page=arguments.get("page", 1),
+                page_size=arguments.get("page_size", 15),
+                sort_by=arguments.get("sort_by", "CreatedDate"),
+                sort_direction=arguments.get("sort_direction", "desc"),
+                ticket_types=arguments.get("ticket_types")
+            )
+        
+        elif tool_name == "get_tickets_by_status":
+            result = await nsp_connector.get_tickets_by_status(
+                status=arguments.get("status", "open"),
+                page=arguments.get("page", 1),
+                page_size=arguments.get("page_size", 15),
+                sort_by=arguments.get("sort_by", "CreatedDate"),
+                sort_direction=arguments.get("sort_direction", "desc"),
+                ticket_types=arguments.get("ticket_types")
+            )
+        
+        elif tool_name == "get_user_by_email":
+            result = await nsp_connector.get_user_by_email(
+                user_email=arguments["user_email"]
             )
         
         elif tool_name == "get_ticket_by_id":
@@ -326,13 +645,30 @@ async def call_tool(tool_name: str, arguments: Dict[str, Any]) -> List[Dict[str,
         
         elif tool_name == "create_ticket":
             result = await nsp_connector.create_ticket(
-                ticket_data=arguments
+                ticket_data=arguments,
+                user_email=user_email
+            )
+        
+        elif tool_name == "create_ticket_with_role":
+            result = await nsp_connector.create_ticket_with_role(
+                ticket_data=arguments,
+                user_email=user_email,
+                role=arguments.get("role", "customer")
             )
         
         elif tool_name == "update_ticket":
             result = await nsp_connector.update_ticket(
                 ticket_id=arguments["ticket_id"],
-                updates=arguments["updates"]
+                updates=arguments["updates"],
+                user_email=user_email
+            )
+        
+        elif tool_name == "update_ticket_with_role":
+            result = await nsp_connector.update_ticket_with_role(
+                ticket_id=arguments["ticket_id"],
+                updates=arguments["updates"],
+                user_email=user_email,
+                role=arguments.get("role", "agent")
             )
         
         elif tool_name == "search_entities":
@@ -340,7 +676,9 @@ async def call_tool(tool_name: str, arguments: Dict[str, Any]) -> List[Dict[str,
                 entity_type=arguments.get("entity_type", "Ticket"),
                 query=arguments["query"],
                 page=arguments.get("page", 1),
-                page_size=arguments.get("page_size", 15)
+                page_size=arguments.get("page_size", 15),
+                sort_by=arguments.get("sort_by", "CreatedDate"),
+                sort_direction=arguments.get("sort_direction", "Descending")
             )
         
         elif tool_name == "get_entity_types":

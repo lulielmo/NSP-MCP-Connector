@@ -3,8 +3,14 @@
   "Values": {
     "AzureWebJobsStorage": "UseDevelopmentStorage=true",
     "FUNCTIONS_WORKER_RUNTIME": "python",
+    
     "HYBRID_CONNECTION_ENDPOINT": "http://your-hybrid-connection-endpoint:5000",
     "HYBRID_CONNECTION_KEY": "your-hybrid-connection-key",
-    "APPLICATIONINSIGHTS_CONNECTION_STRING": "your-app-insights-connection-string"
+    
+    "APPLICATIONINSIGHTS_CONNECTION_STRING": "your-app-insights-connection-string",
+    
+    "NSP_BASE_URL": "https://your-test-nsp-server:9001/api/PublicApi/",
+    "NSP_USERNAME": "your_test_username",
+    "NSP_PASSWORD": "your_test_password"
   }
 } 

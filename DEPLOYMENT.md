@@ -30,7 +30,7 @@ pip install -r requirements.txt
 cp env.example .env
 
 # Edit .env with your NSP settings
-NSP_BASE_URL=http://your-nsp-server:1900/api/PublicApi/
+NSP_BASE_URL=https://your-nsp-server:1901/api/
 NSP_USERNAME=your_username
 NSP_PASSWORD=your_password
 ```

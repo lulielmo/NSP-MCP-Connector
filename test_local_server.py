@@ -175,6 +175,227 @@ def test_search_entities():
         print(f"❌ Error: {e}")
         return False
 
+def test_create_ticket_with_user():
+    """Test creating ticket with user context"""
+    print("\n🧪 Testing create_ticket with user context...")
+    
+    try:
+        data = {
+            "ticket_data": {
+                "title": "Test ticket with user handling",
+                "description": "This is a test to verify that tickets are created in the correct user's name",
+                "priority": "Medium",
+                "category": "Test"
+            },
+            "user_email": "test.user@example.com"
+        }
+        
+        response = requests.post(
+            f"{LOCAL_SERVER_URL}/api/create_ticket",
+            json=data,
+            headers={"Content-Type": "application/json"}
+        )
+        
+        print(f"Status: {response.status_code}")
+        
+        if response.status_code == 200:
+            result = response.json()
+            if result.get('success'):
+                print(f"✅ Ticket created successfully")
+                print(f"Created for user: {result.get('created_for_user')}")
+                return True
+            else:
+                print(f"❌ Error: {result.get('error')}")
+                return False
+        else:
+            print(f"❌ Error: {response.text}")
+            return False
+            
+    except Exception as e:
+        print(f"❌ Error: {e}")
+        return False
+
+def test_update_ticket_with_user():
+    """Test updating ticket with user context"""
+    print("\n🧪 Testing update_ticket with user context...")
+    
+    try:
+        # First create a ticket to update
+        create_data = {
+            "ticket_data": {
+                "title": "Ticket for updating",
+                "description": "This ticket will be updated",
+                "priority": "Low",
+                "category": "Test"
+            },
+            "user_email": "creator@example.com"
+        }
+        
+        create_response = requests.post(
+            f"{LOCAL_SERVER_URL}/api/create_ticket",
+            json=create_data,
+            headers={"Content-Type": "application/json"}
+        )
+        
+        if create_response.status_code != 200:
+            print("❌ Could not create ticket for update test")
+            return False
+        
+        # Get the created ticket ID (this is a simplified test)
+        # In a real scenario, you'd extract the ID from the response
+        ticket_id = 1  # Placeholder - you'd need to extract this from create response
+        
+        # Now update the ticket
+        update_data = {
+            "updates": {
+                "description": "Updated ticket description",
+                "priority": "High"
+            },
+            "user_email": "updater@example.com"
+        }
+        
+        response = requests.put(
+            f"{LOCAL_SERVER_URL}/api/update_ticket/{ticket_id}",
+            json=update_data,
+            headers={"Content-Type": "application/json"}
+        )
+        
+        print(f"Status: {response.status_code}")
+        
+        if response.status_code == 200:
+            result = response.json()
+            if result.get('success'):
+                print(f"✅ Ticket updated successfully")
+                print(f"Updated by user: {result.get('updated_by_user')}")
+                return True
+            else:
+                print(f"❌ Error: {result.get('error')}")
+                return False
+        else:
+            print(f"❌ Error: {response.text}")
+            return False
+            
+    except Exception as e:
+        print(f"❌ Error: {e}")
+        return False
+
+def test_get_user_by_email():
+    """Test getting user by email"""
+    print("\n🧪 Testing get_user_by_email...")
+    
+    try:
+        data = {
+            "email": "test.user@example.com"
+        }
+        
+        response = requests.post(
+            f"{LOCAL_SERVER_URL}/api/get_user_by_email",
+            json=data,
+            headers={"Content-Type": "application/json"}
+        )
+        
+        print(f"Status: {response.status_code}")
+        
+        if response.status_code == 200:
+            result = response.json()
+            if result.get('success'):
+                user_data = result.get('data', {})
+                print(f"✅ User found: {user_data.get('Email', 'N/A')}")
+                print(f"   User ID: {user_data.get('Id', 'N/A')}")
+                return True
+            else:
+                print(f"❌ Error: {result.get('error')}")
+                return False
+        elif response.status_code == 404:
+            print("⚠️  User not found (expected for test)")
+            return True
+        else:
+            print(f"❌ Error: {response.text}")
+            return False
+            
+    except Exception as e:
+        print(f"❌ Error: {e}")
+        return False
+
+def test_get_tickets_by_role():
+    """Test getting tickets by user role"""
+    print("\n🧪 Testing get_tickets_by_role...")
+    
+    try:
+        # Test as customer
+        customer_data = {
+            "user_email": "test.user@example.com",
+            "role": "customer",
+            "page": 1,
+            "page_size": 5
+        }
+        
+        response = requests.post(
+            f"{LOCAL_SERVER_URL}/api/get_tickets_by_role",
+            json=customer_data,
+            headers={"Content-Type": "application/json"}
+        )
+        
+        print(f"Status (customer): {response.status_code}")
+        
+        if response.status_code == 200:
+            result = response.json()
+            if result.get('success'):
+                tickets = result.get('data', [])
+                print(f"✅ Customer tickets: {len(tickets)} found")
+                print(f"   Role: {result.get('user_role')}")
+                return True
+            else:
+                print(f"❌ Error: {result.get('error')}")
+                return False
+        else:
+            print(f"❌ Error: {response.text}")
+            return False
+            
+    except Exception as e:
+        print(f"❌ Error: {e}")
+        return False
+
+def test_create_ticket_with_role():
+    """Test creating ticket with user role"""
+    print("\n🧪 Testing create_ticket_with_role...")
+    
+    try:
+        data = {
+            "title": "Test ticket with role",
+            "description": "This ticket is created with specific user role",
+            "priority": "Medium",
+            "category": "Test",
+            "user_email": "test.user@example.com",
+            "role": "customer"
+        }
+        
+        response = requests.post(
+            f"{LOCAL_SERVER_URL}/api/create_ticket_with_role",
+            json=data,
+            headers={"Content-Type": "application/json"}
+        )
+        
+        print(f"Status: {response.status_code}")
+        
+        if response.status_code == 200:
+            result = response.json()
+            if result.get('success'):
+                print(f"✅ Ticket created successfully")
+                print(f"   User: {result.get('user_email')}")
+                print(f"   Role: {result.get('user_role')}")
+                return True
+            else:
+                print(f"❌ Error: {result.get('error')}")
+                return False
+        else:
+            print(f"❌ Error: {response.text}")
+            return False
+            
+    except Exception as e:
+        print(f"❌ Error: {e}")
+        return False
+
 def main():
     """Run all tests"""
     print("🚀 Starting tests for local NSP API server...")
@@ -186,7 +407,12 @@ def main():
         test_token_refresh,
         test_get_tickets,
         test_get_entity_types,
-        test_search_entities
+        test_search_entities,
+        test_create_ticket_with_user,
+        test_update_ticket_with_user,
+        test_get_user_by_email,
+        test_get_tickets_by_role,
+        test_create_ticket_with_role
     ]
     
     passed = 0

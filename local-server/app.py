@@ -91,29 +91,32 @@ def refresh_token():
 
 @app.route('/api/get_tickets', methods=['POST'])
 def get_tickets():
-    """Get tickets from NSP"""
+    """Get IT-related tickets from NSP with customizable sorting and type filtering"""
     try:
         data = request.get_json() or {}
         page = data.get('page', 1)
         page_size = data.get('page_size', 15)
         filters = data.get('filters', {})
+        sort_by = data.get('sort_by', 'CreatedDate')
+        sort_direction = data.get('sort_direction', 'desc')  # Default to desc for newest first
+        ticket_types = data.get('ticket_types')  # Optional: specific IT ticket types
         
-        logger.info(f"Fetching tickets: page={page}, page_size={page_size}")
+        logger.info(f"Fetching IT tickets: page={page}, page_size={page_size}, sort_by={sort_by}, sort_direction={sort_direction}, types={ticket_types}")
         
-        result = nsp_client.get_tickets(page, page_size, filters)
+        result = nsp_client.get_it_tickets(page, page_size, filters, sort_by, sort_direction, ticket_types)
         
         return jsonify({
             "success": True,
-            "data": result.get('Result', []),
+            "data": result.get('Data', []),  # NSP returns data in 'Data' field
             "pagination": {
                 "page": page,
                 "page_size": page_size,
-                "total_count": result.get('TotalCount', 0)
+                "total_count": result.get('Total', 0)  # NSP returns total in 'Total' field
             }
         })
         
     except Exception as e:
-        logger.error(f"Error fetching tickets: {str(e)}")
+        logger.error(f"Error fetching IT tickets: {str(e)}")
         return jsonify({
             "success": False,
             "error": str(e)
@@ -143,22 +146,27 @@ def get_ticket_by_id(ticket_id):
 def create_ticket():
     """Create new ticket"""
     try:
-        ticket_data = request.get_json()
+        data = request.get_json()
         
-        if not ticket_data:
+        if not data:
             return jsonify({
                 "success": False,
                 "error": "No ticket data provided"
             }), 400
         
-        logger.info("Creating new ticket")
+        # Extract ticket data and user information
+        ticket_data = data.get('ticket_data', data)  # Support both formats
+        user_email = data.get('user_email')  # From Copilot context
         
-        result = nsp_client.create_ticket(ticket_data)
+        logger.info(f"Creating new ticket for user: {user_email or 'API account'}")
+        
+        result = nsp_client.create_ticket(ticket_data, user_email)
         
         return jsonify({
             "success": True,
             "data": result.get('Result', {}),
-            "message": "Ticket created"
+            "message": "Ticket created",
+            "created_for_user": user_email
         })
         
     except Exception as e:
@@ -172,22 +180,27 @@ def create_ticket():
 def update_ticket(ticket_id):
     """Update existing ticket"""
     try:
-        updates = request.get_json()
+        data = request.get_json()
         
-        if not updates:
+        if not data:
             return jsonify({
                 "success": False,
                 "error": "No update data provided"
             }), 400
         
-        logger.info(f"Updating ticket {ticket_id}")
+        # Extract update data and user information
+        updates = data.get('updates', data)  # Support both formats
+        user_email = data.get('user_email')  # From Copilot context
         
-        result = nsp_client.update_ticket(ticket_id, updates)
+        logger.info(f"Updating ticket {ticket_id} for user: {user_email or 'API account'}")
+        
+        result = nsp_client.update_ticket(ticket_id, updates, user_email)
         
         return jsonify({
             "success": True,
             "data": result.get('Result', {}),
-            "message": "Ticket updated"
+            "message": "Ticket updated",
+            "updated_by_user": user_email
         })
         
     except Exception as e:
@@ -199,13 +212,15 @@ def update_ticket(ticket_id):
 
 @app.route('/api/search_entities', methods=['POST'])
 def search_entities():
-    """Search among entities"""
+    """Search among entities with customizable sorting"""
     try:
         data = request.get_json() or {}
         entity_type = data.get('entity_type', 'Ticket')
         query = data.get('query', '')
         page = data.get('page', 1)
         page_size = data.get('page_size', 15)
+        sort_by = data.get('sort_by', 'CreatedDate')
+        sort_direction = data.get('sort_direction', 'Descending')
         
         if not query:
             return jsonify({
@@ -213,9 +228,9 @@ def search_entities():
                 "error": "Search query required"
             }), 400
         
-        logger.info(f"Searching for '{query}' in {entity_type}")
+        logger.info(f"Searching for '{query}' in {entity_type}, sorted by {sort_by} {sort_direction}")
         
-        result = nsp_client.search_entities(entity_type, query, page, page_size)
+        result = nsp_client.search_entities(entity_type, query, page, page_size, sort_by, sort_direction)
         
         return jsonify({
             "success": True,
@@ -289,6 +304,225 @@ def get_attachments(entity_type, entity_id):
         
     except Exception as e:
         logger.error(f"Error fetching attachments: {str(e)}")
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
+
+@app.route('/api/get_user_by_email', methods=['POST'])
+def get_user_by_email():
+    """Get user information by email address"""
+    try:
+        data = request.get_json() or {}
+        email = data.get('email')
+        
+        if not email:
+            return jsonify({
+                "success": False,
+                "error": "Email address required"
+            }), 400
+        
+        logger.info(f"Looking up user by email: {email}")
+        
+        user = nsp_client.get_user_by_email(email)
+        
+        if user:
+            return jsonify({
+                "success": True,
+                "data": user
+            })
+        else:
+            return jsonify({
+                "success": False,
+                "error": f"User not found: {email}"
+            }), 404
+        
+    except Exception as e:
+        logger.error(f"Error looking up user: {str(e)}")
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
+
+@app.route('/api/get_tickets_by_role', methods=['POST'])
+def get_tickets_by_role():
+    """Get IT-related tickets filtered by user role (customer or agent) with customizable sorting and type filtering"""
+    try:
+        data = request.get_json() or {}
+        user_email = data.get('user_email')
+        role = data.get('role', 'customer')  # Default to customer
+        page = data.get('page', 1)
+        page_size = data.get('page_size', 15)
+        sort_by = data.get('sort_by', 'CreatedDate')
+        sort_direction = data.get('sort_direction', 'desc')  # Default to desc for newest first
+        ticket_types = data.get('ticket_types')  # Optional: specific IT ticket types
+        
+        if not user_email:
+            return jsonify({
+                "success": False,
+                "error": "User email required"
+            }), 400
+        
+        if role not in ['customer', 'agent']:
+            return jsonify({
+                "success": False,
+                "error": "Role must be 'customer' or 'agent'"
+            }), 400
+        
+        logger.info(f"Getting IT tickets for user {user_email} as {role}, sorted by {sort_by} {sort_direction}, types={ticket_types}")
+        
+        result = nsp_client.get_tickets_by_user_role(user_email, role, page, page_size, sort_by, sort_direction, ticket_types)
+        
+        return jsonify({
+            "success": True,
+            "data": result.get('Data', []),  # NSP returns data in 'Data' field
+            "pagination": {
+                "page": page,
+                "page_size": page_size,
+                "total_count": result.get('Total', 0)  # NSP returns total in 'Total' field
+            },
+            "user_role": role,
+            "user_email": user_email
+        })
+        
+    except Exception as e:
+        logger.error(f"Error getting IT tickets by role: {str(e)}")
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
+
+@app.route('/api/get_tickets_by_status', methods=['POST'])
+def get_tickets_by_status():
+    """Get IT-related tickets filtered by status (open or closed) with customizable sorting and type filtering"""
+    try:
+        data = request.get_json() or {}
+        status = data.get('status', 'open')  # Default to open tickets
+        page = data.get('page', 1)
+        page_size = data.get('page_size', 15)
+        sort_by = data.get('sort_by', 'CreatedDate')
+        sort_direction = data.get('sort_direction', 'desc')  # Default to desc for newest first
+        ticket_types = data.get('ticket_types')  # Optional: specific IT ticket types
+        
+        if status not in ['open', 'closed']:
+            return jsonify({
+                "success": False,
+                "error": "Status must be 'open' or 'closed'"
+            }), 400
+        
+        logger.info(f"Getting {status} IT tickets, sorted by {sort_by} {sort_direction}, types={ticket_types}")
+        
+        result = nsp_client.get_it_tickets_by_status(status, page, page_size, sort_by, sort_direction, ticket_types)
+        
+        return jsonify({
+            "success": True,
+            "data": result.get('Data', []),  # NSP returns data in 'Data' field
+            "pagination": {
+                "page": page,
+                "page_size": page_size,
+                "total_count": result.get('Total', 0)  # NSP returns total in 'Total' field
+            },
+            "status": status
+        })
+        
+    except Exception as e:
+        logger.error(f"Error getting IT tickets by status: {str(e)}")
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
+
+@app.route('/api/create_ticket_with_role', methods=['POST'])
+def create_ticket_with_role():
+    """Create ticket with proper user context based on role"""
+    try:
+        data = request.get_json()
+        
+        if not data:
+            return jsonify({
+                "success": False,
+                "error": "No ticket data provided"
+            }), 400
+        
+        # Extract ticket data and user information
+        ticket_data = data.get('ticket_data', data)
+        user_email = data.get('user_email')
+        role = data.get('role', 'customer')  # Default to customer
+        
+        if not user_email:
+            return jsonify({
+                "success": False,
+                "error": "User email required"
+            }), 400
+        
+        if role not in ['customer', 'agent']:
+            return jsonify({
+                "success": False,
+                "error": "Role must be 'customer' or 'agent'"
+            }), 400
+        
+        logger.info(f"Creating ticket for user {user_email} as {role}")
+        
+        result = nsp_client.create_ticket_with_user_context(ticket_data, user_email, role)
+        
+        return jsonify({
+            "success": True,
+            "data": result.get('Result', {}),
+            "message": "Ticket created",
+            "user_email": user_email,
+            "user_role": role
+        })
+        
+    except Exception as e:
+        logger.error(f"Error creating ticket with role: {str(e)}")
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
+
+@app.route('/api/update_ticket_with_role/<int:ticket_id>', methods=['PUT'])
+def update_ticket_with_role(ticket_id):
+    """Update ticket with proper user context based on role"""
+    try:
+        data = request.get_json()
+        
+        if not data:
+            return jsonify({
+                "success": False,
+                "error": "No update data provided"
+            }), 400
+        
+        # Extract update data and user information
+        updates = data.get('updates', data)
+        user_email = data.get('user_email')
+        role = data.get('role', 'agent')  # Default to agent for updates
+        
+        if not user_email:
+            return jsonify({
+                "success": False,
+                "error": "User email required"
+            }), 400
+        
+        if role not in ['customer', 'agent']:
+            return jsonify({
+                "success": False,
+                "error": "Role must be 'customer' or 'agent'"
+            }), 400
+        
+        logger.info(f"Updating ticket {ticket_id} for user {user_email} as {role}")
+        
+        result = nsp_client.update_ticket_with_user_context(ticket_id, updates, user_email, role)
+        
+        return jsonify({
+            "success": True,
+            "data": result.get('Result', {}),
+            "message": "Ticket updated",
+            "user_email": user_email,
+            "user_role": role
+        })
+        
+    except Exception as e:
+        logger.error(f"Error updating ticket with role: {str(e)}")
         return jsonify({
             "success": False,
             "error": str(e)

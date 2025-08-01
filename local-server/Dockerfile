@@ -1,19 +1,19 @@
 FROM python:3.9-slim
 
-# Sätt arbetskatalog
+# Set working directory
 WORKDIR /app
 
-# Kopiera requirements och installera dependencies
+# Copy requirements and install dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Kopiera applikationskod
+# Copy application code
 COPY . .
 
-# Exponera port
+# Expose port
 EXPOSE 5000
 
-# Sätt miljövariabler
+# Set environment variables
 ENV FLASK_APP=app.py
 ENV FLASK_ENV=production
 
@@ -21,5 +21,5 @@ ENV FLASK_ENV=production
 HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
   CMD curl -f http://localhost:5000/health || exit 1
 
-# Starta applikationen
+# Start application
 CMD ["python", "app.py"] 
