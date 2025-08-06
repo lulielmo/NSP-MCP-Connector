@@ -33,6 +33,9 @@ nsp_client = NSPClient(
 @app.before_request
 def authenticate_if_needed():
     """Authenticate against NSP if token is missing or expired"""
+    # Log all incoming requests
+    logger.info(f"Request: {request.method} {request.path} from {request.remote_addr}")
+    
     # The NSPClient now handles token validation automatically
     # This is mainly for logging and monitoring
     token_info = nsp_client.get_token_info()
@@ -436,9 +439,12 @@ def get_tickets_by_status():
 def create_ticket_with_role():
     """Create ticket with proper user context based on role"""
     try:
+        logger.info("=== CREATE TICKET WITH ROLE START ===")
         data = request.get_json()
+        logger.info(f"Received data: {data}")
         
         if not data:
+            logger.error("No ticket data provided")
             return jsonify({
                 "success": False,
                 "error": "No ticket data provided"
@@ -449,32 +455,45 @@ def create_ticket_with_role():
         user_email = data.get('user_email')
         role = data.get('role', 'customer')  # Default to customer
         
+        logger.info(f"Extracted: ticket_data={ticket_data}, user_email={user_email}, role={role}")
+        
         if not user_email:
+            logger.error("User email required")
             return jsonify({
                 "success": False,
                 "error": "User email required"
             }), 400
         
         if role not in ['customer', 'agent']:
+            logger.error(f"Invalid role: {role}")
             return jsonify({
                 "success": False,
                 "error": "Role must be 'customer' or 'agent'"
             }), 400
         
         logger.info(f"Creating ticket for user {user_email} as {role}")
+        logger.info(f"Calling nsp_client.create_ticket_with_user_context with ticket_data: {ticket_data}")
         
         result = nsp_client.create_ticket_with_user_context(ticket_data, user_email, role)
+        logger.info(f"NSP client result: {result}")
         
-        return jsonify({
+        response_data = {
             "success": True,
-            "data": result.get('Result', {}),
+            "data": result.get('Data'),  # Ticket ID is directly in Data field
             "message": "Ticket created",
             "user_email": user_email,
             "user_role": role
-        })
+        }
+        logger.info(f"Returning response: {response_data}")
+        logger.info("=== CREATE TICKET WITH ROLE END ===")
+        
+        return jsonify(response_data)
         
     except Exception as e:
         logger.error(f"Error creating ticket with role: {str(e)}")
+        logger.error(f"Exception type: {type(e)}")
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
         return jsonify({
             "success": False,
             "error": str(e)

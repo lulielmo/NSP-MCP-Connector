@@ -185,6 +185,27 @@ class NSPClient:
             if hasattr(e, 'response') and e.response is not None:
                 logger.error(f"Response status: {e.response.status_code}")
                 logger.error(f"Response text: {e.response.text}")
+                
+                # Try to parse JSON response to check for Errors field
+                try:
+                    json_response = e.response.json()
+                    if 'Errors' in json_response:
+                        errors = json_response['Errors']
+                        # Handle case where Errors is an integer instead of a list
+                        if isinstance(errors, int):
+                            logger.error(f"NSP API returned error code: {errors}")
+                            raise Exception(f"NSP API error: {errors}")
+                        elif isinstance(errors, list):
+                            for error in errors:
+                                if isinstance(error, dict):
+                                    message = error.get('Message', 'Unknown error')
+                                    logger.error(f"NSP API error: {message}")
+                                else:
+                                    logger.error(f"NSP API error: {error}")
+                        else:
+                            logger.error(f"NSP API returned unexpected error format: {errors}")
+                except (ValueError, TypeError) as parse_error:
+                    logger.error(f"Could not parse error response: {parse_error}")
             raise
     
     def get_it_tickets(self, page: int = 1, page_size: int = 15, filters: Optional[Dict] = None, 
@@ -196,7 +217,7 @@ class NSPClient:
         Args:
             page: Page number for pagination
             page_size: Number of tickets per page
-            filters: Additional filters to apply
+            filters: Additional filters to apply (simple key-value format)
             sort_by: Field to sort by
             sort_direction: Sort direction ('asc' or 'desc')
             ticket_types: List of specific ticket types to include. If None, includes all IT types:
@@ -207,13 +228,10 @@ class NSPClient:
             ticket_types = ['IT Request', 'ServiceOrderRequest', 'Incident Management']
         
         # Map ticket type names to their numeric IDs
-        # Note: NSP API returns DisplayName for Type field in responses, not numeric IDs
-        # English: 'IT Request' (112), 'Service Order Request' (113), 'Incident Management' (281)
-        # Swedish: 'IT-Ärende' (112), 'Service Order Request' (113), 'Incident Management' (281)
         ticket_type_ids = {
-            'IT Request': 112,      # Updated to match actual NSP DisplayName
+            'IT Request': 112,
             'ServiceOrderRequest': 113,
-            'Incident Management': 281  # Updated to match actual NSP DisplayName
+            'Incident Management': 281
         }
         
         # Build the type filter for IT-related tickets using numeric IDs
@@ -226,35 +244,69 @@ class NSPClient:
                     "value": ticket_type_ids[ticket_type]
                 })
         
-        # Combine type filter with any additional filters
-        combined_filters = {
-            "logic": "and",
-            "filters": [
-                {
-                    "logic": "or",
-                    "filters": type_filters
-                }
-            ]
-        }
+        # Start with type filter
+        all_filters = []
+        if type_filters:
+            all_filters.append({
+                "logic": "or",
+                "filters": type_filters
+            })
         
         # Add additional filters if provided
         if filters:
-            # If filters is a simple filter object, wrap it in the combined structure
-            if "logic" not in filters:
-                combined_filters["filters"].append(filters)
-            else:
-                # If filters already has a logic structure, add it directly
-                combined_filters["filters"].append(filters)
+            # Convert simple key-value filters to NSP format
+            for key, value in filters.items():
+                # Skip EntityType filter - it's not a filter field, it's a query parameter
+                if key == "EntityType":
+                    continue
+                    
+                # Remove .Id suffix if present (e.g., BaseEntityStatus.Id -> BaseEntityStatus)
+                clean_key = key.replace('.Id', '')
+                
+                if isinstance(value, list):
+                    # Handle list values (e.g., multiple status IDs)
+                    list_filters = []
+                    for v in value:
+                        list_filters.append({
+                            "field": clean_key,
+                            "operator": "eq",
+                            "value": v
+                        })
+                    all_filters.append({
+                        "logic": "or",
+                        "filters": list_filters
+                    })
+                else:
+                    # Handle single values
+                    all_filters.append({
+                        "field": clean_key,
+                        "operator": "eq",
+                        "value": value
+                    })
+        
+        # Build the final filter structure according to NSP API documentation
+        if len(all_filters) == 0:
+            combined_filters = None
+        elif len(all_filters) == 1:
+            # Single filter - use it directly without logic wrapper
+            combined_filters = all_filters[0]
+        else:
+            # Multiple filters - combine with AND logic
+            combined_filters = {
+                "logic": "and",
+                "filters": all_filters
+            }
         
         query_data = {
-            "EntityType": "SysTicket",  # Use SysTicket as base entity type
+            "EntityType": "SysTicket",
             "Page": page,
-            "PageSize": page_size,
-            "filters": combined_filters
+            "PageSize": page_size
         }
         
+        if combined_filters:
+            query_data["filters"] = combined_filters
+        
         # Workaround: Use explicit columns for SysTicket to avoid SortOrder issues
-        # These columns should work for all IT ticket types
         query_data["columns"] = [
             "Type", "Owner", "Version", "CreatedDate", "CreatedBy", "UpdatedDate", "UpdatedBy", 
             "IPAddress", "BaseStatus", "OwnerAgent", "CC", "Priority", "Category", "Callback", 
@@ -314,10 +366,10 @@ class NSPClient:
         # If user_email is provided, add it to the ticket data for proper attribution
         if user_email:
             ticket_data['CreatedBy'] = user_email
-            ticket_data['AssignedTo'] = user_email
+            ticket_data['UpdatedBy'] = user_email
             logger.info(f"Creating ticket on behalf of user: {user_email}")
         
-        return self._make_request('POST', 'CreateEntity', ticket_data)
+        return self._make_request('POST', 'SaveEntity', ticket_data)
     
     def update_ticket(self, ticket_id: int, updates: Dict[str, Any], user_email: Optional[str] = None) -> Dict[str, Any]:
         """Update existing ticket with optional user context"""
@@ -332,7 +384,7 @@ class NSPClient:
             update_data['ModifiedBy'] = user_email
             logger.info(f"Updating ticket {ticket_id} on behalf of user: {user_email}")
         
-        return self._make_request('POST', 'UpdateEntity', update_data)
+        return self._make_request('POST', 'SaveEntity', update_data)
     
     def get_it_tickets_by_status(self, status: str = "open", page: int = 1, page_size: int = 15,
                                 sort_by: str = "CreatedDate", sort_direction: str = "desc",
@@ -348,18 +400,14 @@ class NSPClient:
             sort_direction: Sort direction ('asc' or 'desc')
             ticket_types: List of specific ticket types to include. If None, includes all IT types
         """
-        # Build status filter based on BaseEntityStatus
+        # Build status filter based on BaseEntityStatus using the new filter structure
         if status.lower() == "open":
             status_filter = {
-                "field": "BaseEntityStatus",
-                "operator": "neq",
-                "value": 11
+                "BaseEntityStatus": [1, 3, 6, 9]  # Not closed statuses
             }
         elif status.lower() == "closed":
             status_filter = {
-                "field": "BaseEntityStatus",
-                "operator": "eq",
-                "value": 11
+                "BaseEntityStatus": [10, 11]  # Resolved, Closed
             }
         else:
             raise ValueError(f"Invalid status: {status}. Must be 'open' or 'closed'")
@@ -414,7 +462,7 @@ class NSPClient:
                 "ExtraCustomField2", "ExtraCustomField3", "DoNotSendEmailNotification", "LyncTel", 
                 "AdManagerUserId", "SwedishPersonalNumber", "NormalizedSwedishPersonalNumber", 
                 "NorwegianPid", "ExternalId", "DoNotSendApprovalNotification", "u_Rrelsegrenkostnadsstlle", 
-                "u_Mailnotifieringvidnyttrende"
+                "u_Mailnotifieringvidnytttrende"
             ]
         
         try:
@@ -433,11 +481,11 @@ class NSPClient:
     
     def get_entity_types(self) -> Dict[str, Any]:
         """Get available entity types"""
-        return self._make_request('GET', 'GetEntityTypes')
+        return self._make_request('GET', 'GetAllEntityTypes')
     
     def get_entity_metadata(self, entity_type: str) -> Dict[str, Any]:
         """Get metadata for specific entity type"""
-        return self._make_request('POST', 'GetEntityTypeInfo', {"EntityType": entity_type})
+        return self._make_request('GET', f'GetEntityTypeInfo?entityType={entity_type}')
     
     def upload_attachment(self, entity_id: int, entity_type: str, file_data: bytes, filename: str) -> Dict[str, Any]:
         """Upload attachment to entity"""
@@ -536,70 +584,234 @@ class NSPClient:
         
         user_id = user.get('Id')
         
-        # Map ticket type names to their numeric IDs
-        # Note: NSP API returns DisplayName for Type field in responses, not numeric IDs
-        # English: 'IT Request' (112), 'Service Order Request' (113), 'Incident Management' (281)
-        # Swedish: 'IT-Ärende' (112), 'Service Order Request' (113), 'Incident Management' (281)
-        ticket_type_ids = {
-            'Ticket': 112,
-            'ServiceOrderRequest': 113,
-            'Incident': 281
-        }
+        # Create simple filters that get_it_tickets can handle
+        # The get_it_tickets method will handle the complex filter structure internally
+        filters = {}
         
-        # Default IT ticket types if none specified
-        if ticket_types is None:
-            ticket_types = ['IT Request', 'ServiceOrderRequest', 'Incident Management']
-        
-        # Build the type filter for IT-related tickets using numeric IDs
-        type_filters = []
-        for ticket_type in ticket_types:
-            if ticket_type in ticket_type_ids:
-                type_filters.append({
-                    "field": "Type",
-                    "operator": "eq",
-                    "value": ticket_type_ids[ticket_type]
-                })
-        
-        # Build the complete filter structure combining user role and ticket types
         if role.lower() == "customer":
-            # Tickets where user is the end user/customer AND matches IT ticket types
-            filters = {
-                "logic": "and",
-                "filters": [
-                    {
-                        "field": "BaseEndUser",
-                        "operator": "eq",
-                        "value": user_id
-                    },
-                    {
-                        "logic": "or",
-                        "filters": type_filters
-                    }
-                ]
-            }
+            # Tickets where user is the end user/customer
+            filters["BaseEndUser"] = user_id
         elif role.lower() == "agent":
-            # Tickets where user is the assigned agent AND matches IT ticket types
-            filters = {
-                "logic": "and",
-                "filters": [
-                    {
-                        "field": "BaseAgent",
-                        "operator": "eq",
-                        "value": user_id
-                    },
-                    {
-                        "logic": "or",
-                        "filters": type_filters
-                    }
-                ]
-            }
+            # Tickets where user is the assigned agent
+            filters["BaseAgent"] = user_id
         else:
             raise ValueError(f"Invalid role: {role}. Must be 'customer' or 'agent'")
         
-        # Get IT tickets with the combined filter structure
+        # Get IT tickets with the user filter and specified ticket types
         return self.get_it_tickets(page=page, page_size=page_size, filters=filters, 
-                                 sort_by=sort_by, sort_direction=sort_direction)
+                                 sort_by=sort_by, sort_direction=sort_direction,
+                                 ticket_types=ticket_types)
     
+    def get_priority_ids(self) -> Dict[str, int]:
+        """Get available priority IDs from NSP API"""
+        try:
+            # Query the SysPriority table to get available priorities
+            query_data = {
+                "EntityType": "SysPriority",
+                "Page": 1,
+                "PageSize": 50
+            }
+            
+            result = self._make_request('POST', 'GetEntityListByQuery', query_data)
+            
+            if result and result.get('Data'):
+                priorities = {}
+                for priority in result['Data']:
+                    # Use DisplayNameId if available and not empty/null, otherwise fallback to StrongName
+                    display_name = priority.get('DisplayNameId')
+                    strong_name = priority.get('StrongName', '')
+                    
+                    # Choose the name to use - prefer DisplayNameId if it exists and is not empty/null
+                    if display_name and display_name.strip():  # Check if not None, empty, or just whitespace
+                        name = display_name.lower()
+                    elif strong_name and strong_name.strip():
+                        name = strong_name.lower()
+                    else:
+                        # Skip this entry if we don't have a valid name
+                        continue
+                    
+                    priority_id = priority.get('Id')
+                    if priority_id is not None and name:  # Only add if we have both ID and name
+                        priorities[name] = priority_id
+                
+                logger.info(f"Found priorities: {priorities}")
+                return priorities
+            else:
+                logger.warning("Could not fetch priorities from NSP API, using defaults")
+                return {"medium": 2}  # Fallback to default
+                
+        except Exception as e:
+            logger.error(f"Error fetching priorities: {str(e)}")
+            return {"medium": 2}  # Fallback to default
+
+    def get_entity_status_ids(self) -> Dict[str, int]:
+        """Get available entity status IDs from NSP API"""
+        try:
+            query_data = {
+                "EntityType": "SysEntityStatus",
+                "Page": 1,
+                "PageSize": 50,
+                #"columns": ["Id", "Name", "Description"]
+            }
+            
+            result = self._make_request('POST', 'GetEntityListByQuery', query_data)
+            
+            if result and result.get('Data'):
+                statuses = {}
+                for status in result['Data']:
+                    # Use DisplayNameId if available and not empty/null, otherwise fallback to StrongName
+                    display_name = status.get('DisplayNameId')
+                    strong_name = status.get('StrongName', '')
+                    
+                    # Choose the name to use - prefer DisplayNameId if it exists and is not empty/null
+                    if display_name and display_name.strip():  # Check if not None, empty, or just whitespace
+                        name = display_name.lower()
+                    elif strong_name and strong_name.strip():
+                        name = strong_name.lower()
+                    else:
+                        # Skip this entry if we don't have a valid name
+                        continue
+                    
+                    status_id = status.get('Id')
+                    if status_id is not None and name:  # Only add if we have both ID and name
+                        statuses[name] = status_id
+                
+                logger.info(f"Found entity statuses: {statuses}")
+                return statuses
+            else:
+                logger.warning("Could not fetch entity statuses from NSP API, using defaults")
+                return {"open": 1}  # Fallback to default
+                
+        except Exception as e:
+            logger.error(f"Error fetching entity statuses: {str(e)}")
+            return {"open": 1}  # Fallback to default
+
+    def get_agent_group_ids(self) -> Dict[str, int]:
+        """Get available agent group IDs from NSP API"""
+        try:
+            query_data = {
+                "EntityType": "SysGroup",
+                "Page": 1,
+                "PageSize": 50,
+                #"columns": ["Id", "Name", "Description"]
+            }
+            
+            result = self._make_request('POST', 'GetEntityListByQuery', query_data)
+            
+            if result and result.get('Data'):
+                groups = {}
+                for group in result['Data']:
+                    # Use GroupName if available and not empty/null, otherwise fallback to StrongName
+                    group_name = group.get('GroupName')
+                    strong_name = group.get('StrongName', '')
+                    
+                    # Choose the name to use - prefer GroupName if it exists and is not empty/null
+                    if group_name and group_name.strip():  # Check if not None, empty, or just whitespace
+                        name = group_name.lower()
+                    elif strong_name and strong_name.strip():
+                        name = strong_name.lower()
+                    else:
+                        # Skip this entry if we don't have a valid name
+                        continue
+                    
+                    group_id = group.get('Id')
+                    if group_id is not None and name:  # Only add if we have both ID and name
+                        groups[name] = group_id
+                
+                logger.info(f"Found agent groups: {groups}")
+                return groups
+            else:
+                logger.warning("Could not fetch agent groups from NSP API, using defaults")
+                return {"default": 1}  # Fallback to default
+                
+        except Exception as e:
+            logger.error(f"Error fetching agent groups: {str(e)}")
+            return {"default": 1}  # Fallback to default
+
+    def get_entity_source_ids(self) -> Dict[str, int]:
+        """Get available entity source IDs from NSP API"""
+        try:
+            query_data = {
+                "EntityType": "SysEntitySource",
+                "Page": 1,
+                "PageSize": 50,
+                #"columns": ["Id", "Name", "Description"]
+            }
+            
+            result = self._make_request('POST', 'GetEntityListByQuery', query_data)
+            
+            if result and result.get('Data'):
+                sources = {}
+                for source in result['Data']:
+                    # Use DisplayNameId if available and not empty/null, otherwise fallback to SourceName
+                    display_name = source.get('DisplayNameId')
+                    source_name = source.get('SourceName', '')
+                    
+                    # Choose the name to use - prefer DisplayNameId if it exists and is not empty/null
+                    if display_name and display_name.strip():  # Check if not None, empty, or just whitespace
+                        name = display_name.lower()
+                    elif source_name and source_name.strip():
+                        name = source_name.lower()
+                    else:
+                        # Skip this entry if we don't have a valid name
+                        continue
+                    
+                    source_id = source.get('Id')
+                    if source_id is not None and name:  # Only add if we have both ID and name
+                        sources[name] = source_id
+                
+                logger.info(f"Found entity sources: {sources}")
+                return sources
+            else:
+                logger.warning("Could not fetch entity sources from NSP API, using defaults")
+                return {"web": 1}  # Fallback to default
+                
+        except Exception as e:
+            logger.error(f"Error fetching entity sources: {str(e)}")
+            return {"web": 1}  # Fallback to default
+
+    def get_form_ids(self) -> Dict[str, int]:
+        """Get available form IDs from NSP API"""
+        try:
+            query_data = {
+                "EntityType": "SysEntityForm",
+                "Page": 1,
+                "PageSize": 50,
+                #"columns": ["Id", "Name", "Description"]
+            }
+            
+            result = self._make_request('POST', 'GetEntityListByQuery', query_data)
+            
+            if result and result.get('Data'):
+                forms = {}
+                for form in result['Data']:
+                    # Use DisplayName if available and not empty/null, otherwise fallback to StrongName
+                    display_name = form.get('DisplayName')
+                    strong_name = form.get('StrongName', '')
+                    
+                    # Choose the name to use - prefer DisplayName if it exists and is not empty/null
+                    if display_name and display_name.strip():  # Check if not None, empty, or just whitespace
+                        name = display_name.lower()
+                    elif strong_name and strong_name.strip():
+                        name = strong_name.lower()
+                    else:
+                        # Skip this entry if we don't have a valid name
+                        continue
+                    
+                    form_id = form.get('Id')
+                    if form_id is not None and name:  # Only add if we have both ID and name
+                        forms[name] = form_id
+                
+                logger.info(f"Found forms: {forms}")
+                return forms
+            else:
+                logger.warning("Could not fetch forms from NSP API, using defaults")
+                return {"default": 1}  # Fallback to default
+                
+        except Exception as e:
+            logger.error(f"Error fetching forms: {str(e)}")
+            return {"default": 1}  # Fallback to default
+
     def create_ticket_with_user_context(self, ticket_data: Dict[str, Any], user_email: str, role: str = "customer") -> Dict[str, Any]:
         """Create ticket with proper user context based on role"""
         # Get user information
@@ -609,21 +821,86 @@ class NSPClient:
         
         user_id = user.get('Id')
         
+        # Get available IDs from NSP for required fields
+        priority_ids = self.get_priority_ids()
+        status_ids = self.get_entity_status_ids()
+        agent_group_ids = self.get_agent_group_ids()
+        source_ids = self.get_entity_source_ids()
+        form_ids = self.get_form_ids()
+        
+        # Convert field names from Azure Function format to NSP format
+        converted_data = {}
+        for key, value in ticket_data.items():
+            if key == "title":
+                converted_data["BaseHeader"] = value
+            elif key == "description":
+                converted_data["BaseDescription"] = value
+            elif key == "priority":
+                # Convert priority string to PriorityId using dynamic mapping
+                priority_lower = value.lower() if isinstance(value, str) else str(value).lower()
+                if priority_lower in priority_ids:
+                    converted_data["PriorityId"] = priority_ids[priority_lower]
+                else:
+                    # Try to find a close match
+                    for name, pid in priority_ids.items():
+                        if priority_lower in name or name in priority_lower:
+                            converted_data["PriorityId"] = pid
+                            break
+                    else:
+                        # Use first available priority as fallback
+                        first_priority = next(iter(priority_ids.values()), 2)
+                        converted_data["PriorityId"] = first_priority
+                        logger.warning(f"Priority '{value}' not found, using fallback ID: {first_priority}")
+            elif key == "category":
+                # For now, skip category as it might need special handling
+                pass
+            else:
+                # Keep other fields as-is
+                converted_data[key] = value
+        
+        # Get valid IDs for required fields
+        default_status_id = next(iter(status_ids.values()), 1)
+        default_agent_group_id = next(iter(agent_group_ids.values()), 1)
+        
+        # Use Microsoft Chat Bot as source since we're creating tickets via AI assistant
+        default_source_id = source_ids.get('microsoft chat bot', 16)  # ID 16 for Microsoft Chat Bot
+        if not default_source_id:
+            # Fallback to API if Microsoft Chat Bot not found
+            default_source_id = source_ids.get('api', 24)  # ID 24 for API
+            if not default_source_id:
+                # Final fallback to first available source
+                default_source_id = next(iter(source_ids.values()), 1)
+        
+        default_form_id = next(iter(form_ids.values()), 1)
+        
+        # Prepare ticket data with required fields using valid IDs
+        prepared_ticket_data = {
+            "EntityType": "Ticket",  # Required by NSP API
+            "BaseEntityStatusId": default_status_id,
+            "AgentGroupId": default_agent_group_id,
+            "BaseEntitySource": default_source_id,
+            "FormId": default_form_id,
+            **converted_data
+        }
+        
         # Set user context based on role
         if role.lower() == "customer":
             # User is creating ticket as customer
-            ticket_data['BaseEndUser'] = user_id
-            ticket_data['ReportedBy'] = user_id
+            prepared_ticket_data['BaseEndUser'] = user_id
+            prepared_ticket_data['CreatedBy'] = user_id
+            prepared_ticket_data['UpdatedBy'] = user_id
             logger.info(f"Creating ticket as customer: {user_email}")
         elif role.lower() == "agent":
             # User is creating ticket as agent
-            ticket_data['BaseAgent'] = user_id
-            ticket_data['CreatedBy'] = user_id
+            prepared_ticket_data['BaseAgent'] = user_id
+            prepared_ticket_data['CreatedBy'] = user_id
+            prepared_ticket_data['UpdatedBy'] = user_id
             logger.info(f"Creating ticket as agent: {user_email}")
         else:
             raise ValueError(f"Invalid role: {role}. Must be 'customer' or 'agent'")
         
-        return self._make_request('POST', 'CreateEntity', ticket_data)
+        logger.info(f"Final ticket data: {prepared_ticket_data}")
+        return self._make_request('POST', 'SaveEntity', prepared_ticket_data)
     
     def update_ticket_with_user_context(self, ticket_id: int, updates: Dict[str, Any], user_email: str, role: str = "agent") -> Dict[str, Any]:
         """Update ticket with proper user context based on role"""
@@ -653,4 +930,4 @@ class NSPClient:
         else:
             raise ValueError(f"Invalid role: {role}. Must be 'customer' or 'agent'")
         
-        return self._make_request('POST', 'UpdateEntity', update_data) 
+        return self._make_request('POST', 'SaveEntity', update_data) 

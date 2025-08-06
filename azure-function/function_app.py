@@ -9,13 +9,27 @@ import json
 import os
 import httpx
 from tenacity import retry, stop_after_attempt, wait_exponential
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
+from nsp_filtering_helpers import (
+    create_simple_status_filter,
+    create_simple_stage_filter,
+    create_entity_type_filter,
+    create_my_tickets_filter,
+    create_open_tickets_filter,
+    create_closed_tickets_filter,
+    create_combined_filter,
+    format_ticket_summary,
+    get_filter_description
+)
 
 # Configure logging
 logger = logging.getLogger(__name__)
 
 # Hybrid Connection configuration
 HYBRID_CONNECTION_ENDPOINT = os.environ.get('HYBRID_CONNECTION_ENDPOINT', 'http://localhost:5000')
+
+# Create Azure Function app
+app = func.FunctionApp()
 
 class NSPMCPConnector:
     """MCP Connector for NSP that communicates with local REST API"""
@@ -32,6 +46,8 @@ class NSPMCPConnector:
             async with httpx.AsyncClient(timeout=30.0) as client:
                 if method.upper() == 'GET':
                     response = await client.get(url)
+                elif method.upper() == 'PUT':
+                    response = await client.put(url, json=data or {})
                 else:
                     response = await client.post(url, json=data or {})
                 
@@ -40,6 +56,12 @@ class NSPMCPConnector:
                 
         except httpx.RequestError as e:
             logger.error(f"Error calling local API: {str(e)}")
+            raise
+        except httpx.HTTPStatusError as e:
+            logger.error(f"HTTP error calling local API: {e.response.status_code} - {e.response.text}")
+            raise
+        except Exception as e:
+            logger.error(f"Unexpected error calling local API: {str(e)}")
             raise
     
     async def get_tickets(self, page: int = 1, page_size: int = 15, filters: Dict = None, 
@@ -59,27 +81,183 @@ class NSPMCPConnector:
         
         return await self._call_local_api('/api/get_tickets', data=data)
     
+    # User-friendly ticket functions
+    
+    async def get_my_tickets(self, user_email: str, page: int = 1, page_size: int = 15) -> Dict[str, Any]:
+        """Get tickets assigned to the current user"""
+        # First get user information to get their ID
+        user_data = {"email": user_email}
+        user_result = await self._call_local_api('/api/get_user_by_email', data=user_data)
+        
+        if not user_result.get('success') or not user_result.get('data'):
+            return {"error": f"User not found: {user_email}"}
+        
+        user = user_result['data']
+        user_id = user.get('Id')
+        
+        if not user_id:
+            return {"error": f"User ID not found for: {user_email}"}
+        
+        # Create filter using user ID for BaseAgent
+        filters = {
+            "BaseAgent": user_id,
+            "BaseEntityStatus": [1, 3, 6, 9]  # Not closed statuses
+        }
+        
+        result = await self.get_tickets(page=page, page_size=page_size, filters=filters)
+        
+        # Format response for user-friendly display
+        if 'Result' in result and result['Result']:
+            result['Result'] = [format_ticket_summary(ticket) for ticket in result['Result']]
+            result['filter_description'] = get_filter_description(filters)
+        
+        return result
+    
+    async def get_open_tickets(self, page: int = 1, page_size: int = 15) -> Dict[str, Any]:
+        """Get all open tickets (not closed)"""
+        filters = create_open_tickets_filter()
+        result = await self.get_tickets(page=page, page_size=page_size, filters=filters)
+        
+        if 'Result' in result and result['Result']:
+            result['Result'] = [format_ticket_summary(ticket) for ticket in result['Result']]
+            result['filter_description'] = get_filter_description(filters)
+        
+        return result
+    
+    async def get_closed_tickets(self, page: int = 1, page_size: int = 15) -> Dict[str, Any]:
+        """Get all closed tickets"""
+        filters = create_closed_tickets_filter()
+        result = await self.get_tickets(page=page, page_size=page_size, filters=filters)
+        
+        if 'Result' in result and result['Result']:
+            result['Result'] = [format_ticket_summary(ticket) for ticket in result['Result']]
+            result['filter_description'] = get_filter_description(filters)
+        
+        return result
+    
+    async def get_tickets_by_status(self, status: str, page: int = 1, page_size: int = 15) -> Dict[str, Any]:
+        """Get tickets by status (New, Open, Assigned, In progress, Closed, etc.)"""
+        filters = create_simple_status_filter(status)
+        if not filters:
+            return {"error": f"Invalid status: {status}. Valid statuses: New, Registered, Assigned, In progress, Pending, Resolved, Closed"}
+        
+        result = await self.get_tickets(page=page, page_size=page_size, filters=filters)
+        
+        if 'Result' in result and result['Result']:
+            result['Result'] = [format_ticket_summary(ticket) for ticket in result['Result']]
+            result['filter_description'] = get_filter_description(filters)
+        
+        return result
+    
+    async def get_tickets_by_type(self, entity_type: str, page: int = 1, page_size: int = 15) -> Dict[str, Any]:
+        """Get tickets by type (Ticket, ServiceOrderRequest, Incident)"""
+        # Map entity type names to ticket type names for filtering
+        entity_type_to_ticket_type = {
+            "Ticket": "IT Request",
+            "ServiceOrderRequest": "ServiceOrderRequest", 
+            "Incident": "Incident Management"
+        }
+        
+        ticket_type = entity_type_to_ticket_type.get(entity_type, "IT Request")
+        result = await self.get_tickets(page=page, page_size=page_size, ticket_types=[ticket_type])
+        
+        if 'Result' in result and result['Result']:
+            result['Result'] = [format_ticket_summary(ticket) for ticket in result['Result']]
+            result['filter_description'] = f"Typ: {entity_type}"
+        
+        return result
+    
+    async def get_tickets_by_stage(self, entity_type: str, stage: str, page: int = 1, page_size: int = 15) -> Dict[str, Any]:
+        """Get tickets by stage (New, Open, Resolved, Closed) for specific entity type"""
+        # Map entity type names to ticket type names for filtering
+        entity_type_to_ticket_type = {
+            "Ticket": "IT Request",
+            "ServiceOrderRequest": "ServiceOrderRequest", 
+            "Incident": "Incident Management"
+        }
+        
+        ticket_type = entity_type_to_ticket_type.get(entity_type, "IT Request")
+        stage_filter = create_simple_stage_filter(stage, entity_type)
+        
+        if not stage_filter:
+            return {"error": f"Invalid stage: {stage} for type: {entity_type}"}
+        
+        result = await self.get_tickets(page=page, page_size=page_size, filters=stage_filter, ticket_types=[ticket_type])
+        
+        if 'Result' in result and result['Result']:
+            result['Result'] = [format_ticket_summary(ticket) for ticket in result['Result']]
+            result['filter_description'] = f"Typ: {entity_type}, Fas: {stage}"
+        
+        return result
+    
+    async def search_tickets(self, 
+                           status: Optional[str] = None,
+                           entity_type: Optional[str] = None,
+                           stage: Optional[str] = None,
+                           user_email: Optional[str] = None,
+                           page: int = 1, 
+                           page_size: int = 15) -> Dict[str, Any]:
+        """Advanced search with multiple criteria"""
+        # Build filters and ticket types
+        filters = {}
+        ticket_types = None
+        
+        # Handle status filter
+        if status:
+            status_filter = create_simple_status_filter(status)
+            filters.update(status_filter)
+        
+        # Handle stage filter
+        if stage and entity_type:
+            stage_filter = create_simple_stage_filter(stage, entity_type)
+            filters.update(stage_filter)
+        
+        # Handle user filter
+        if user_email:
+            user_filter = create_my_tickets_filter(user_email)
+            filters.update(user_filter)
+        
+        # Handle entity type (map to ticket types)
+        if entity_type:
+            entity_type_to_ticket_type = {
+                "Ticket": "IT Request",
+                "ServiceOrderRequest": "ServiceOrderRequest", 
+                "Incident": "Incident Management"
+            }
+            ticket_type = entity_type_to_ticket_type.get(entity_type, "IT Request")
+            ticket_types = [ticket_type]
+        
+        result = await self.get_tickets(page=page, page_size=page_size, filters=filters, ticket_types=ticket_types)
+        
+        if 'Result' in result and result['Result']:
+            result['Result'] = [format_ticket_summary(ticket) for ticket in result['Result']]
+            result['filter_description'] = get_filter_description(filters)
+        
+        return result
+    
     async def get_ticket_by_id(self, ticket_id: int) -> Dict[str, Any]:
         """Get specific ticket"""
         return await self._call_local_api(f'/api/get_ticket/{ticket_id}', method='GET')
     
     async def create_ticket(self, ticket_data: Dict[str, Any], user_email: str = None) -> Dict[str, Any]:
         """Create new ticket with user context"""
-        # Include user email in the request if provided
-        request_data = {
+        # Use create_ticket_with_role with customer role for consistency
+        data = {
             "ticket_data": ticket_data,
-            "user_email": user_email
+            "user_email": user_email,
+            "role": "customer"  # Always customer when creating tickets
         }
-        return await self._call_local_api('/api/create_ticket', data=request_data)
+        return await self._call_local_api('/api/create_ticket_with_role', data=data)
     
     async def update_ticket(self, ticket_id: int, updates: Dict[str, Any], user_email: str = None) -> Dict[str, Any]:
         """Update ticket with user context"""
-        # Include user email in the request if provided
-        request_data = {
+        # Use update_ticket_with_role with agent role for consistency
+        data = {
             "updates": updates,
-            "user_email": user_email
+            "user_email": user_email,
+            "role": "agent"  # Default to agent role for updates
         }
-        return await self._call_local_api(f'/api/update_ticket/{ticket_id}', method='PUT', data=request_data)
+        return await self._call_local_api(f'/api/update_ticket_with_role/{ticket_id}', method='PUT', data=data)
     
     async def search_entities(self, entity_type: str, query: str, page: int = 1, page_size: int = 15,
                             sort_by: str = "CreatedDate", sort_direction: str = "Descending") -> Dict[str, Any]:
@@ -165,6 +343,179 @@ nsp_connector = NSPMCPConnector()
 
 # MCP Tool definitions
 MCP_TOOLS = [
+    {
+        "name": "get_my_tickets",
+        "description": "Get tickets assigned to the current user",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "user_email": {
+                    "type": "string",
+                    "description": "User's email address"
+                },
+                "page": {
+                    "type": "integer",
+                    "description": "Page number (default: 1)",
+                    "default": 1
+                },
+                "page_size": {
+                    "type": "integer",
+                    "description": "Number of tickets per page (default: 15)",
+                    "default": 15
+                }
+            },
+            "required": ["user_email"]
+        }
+    },
+    {
+        "name": "get_open_tickets",
+        "description": "Get all open tickets (not closed)",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "page": {
+                    "type": "integer",
+                    "description": "Page number (default: 1)",
+                    "default": 1
+                },
+                "page_size": {
+                    "type": "integer",
+                    "description": "Number of tickets per page (default: 15)",
+                    "default": 15
+                }
+            }
+        }
+    },
+    {
+        "name": "get_closed_tickets",
+        "description": "Get all closed tickets",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "page": {
+                    "type": "integer",
+                    "description": "Page number (default: 1)",
+                    "default": 1
+                },
+                "page_size": {
+                    "type": "integer",
+                    "description": "Number of tickets per page (default: 15)",
+                    "default": 15
+                }
+            }
+        }
+    },
+    {
+        "name": "get_tickets_by_status",
+        "description": "Get tickets by status (New, Open, Assigned, In progress, Closed, etc.)",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "status": {
+                    "type": "string",
+                    "description": "Status: New, Registered, Assigned, In progress, Pending, Resolved, Closed"
+                },
+                "page": {
+                    "type": "integer",
+                    "description": "Page number (default: 1)",
+                    "default": 1
+                },
+                "page_size": {
+                    "type": "integer",
+                    "description": "Number of tickets per page (default: 15)",
+                    "default": 15
+                }
+            },
+            "required": ["status"]
+        }
+    },
+    {
+        "name": "get_tickets_by_type",
+        "description": "Get tickets by type (Ticket, ServiceOrderRequest, Incident)",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "entity_type": {
+                    "type": "string",
+                    "description": "Entity type: Ticket, ServiceOrderRequest, Incident"
+                },
+                "page": {
+                    "type": "integer",
+                    "description": "Page number (default: 1)",
+                    "default": 1
+                },
+                "page_size": {
+                    "type": "integer",
+                    "description": "Number of tickets per page (default: 15)",
+                    "default": 15
+                }
+            },
+            "required": ["entity_type"]
+        }
+    },
+    {
+        "name": "get_tickets_by_stage",
+        "description": "Get tickets by stage (New, Open, Resolved, Closed) for specific entity type",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "entity_type": {
+                    "type": "string",
+                    "description": "Entity type: Ticket, ServiceOrderRequest, Incident"
+                },
+                "stage": {
+                    "type": "string",
+                    "description": "Stage: New, Open, Resolved, Closed"
+                },
+                "page": {
+                    "type": "integer",
+                    "description": "Page number (default: 1)",
+                    "default": 1
+                },
+                "page_size": {
+                    "type": "integer",
+                    "description": "Number of tickets per page (default: 15)",
+                    "default": 15
+                }
+            },
+            "required": ["entity_type", "stage"]
+        }
+    },
+    {
+        "name": "search_tickets",
+        "description": "Advanced search with multiple criteria (status, type, stage, user)",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "status": {
+                    "type": "string",
+                    "description": "Status filter (optional)"
+                },
+                "entity_type": {
+                    "type": "string",
+                    "description": "Entity type filter (optional)"
+                },
+                "stage": {
+                    "type": "string",
+                    "description": "Stage filter (optional)"
+                },
+                "user_email": {
+                    "type": "string",
+                    "description": "User email filter (optional)"
+                },
+                "page": {
+                    "type": "integer",
+                    "description": "Page number (default: 1)",
+                    "default": 1
+                },
+                "page_size": {
+                    "type": "integer",
+                    "description": "Number of tickets per page (default: 15)",
+                    "default": 15
+                }
+            }
+        }
+    },
     {
         "name": "get_tickets",
         "description": "Get IT-related tickets from NSP with pagination, filtering, customizable sorting, and type filtering",
@@ -602,7 +953,60 @@ async def call_tool(tool_name: str, arguments: Dict[str, Any], user_email: str =
     """Call specific tool and return result"""
     
     try:
-        if tool_name == "get_tickets":
+        # User-friendly functions
+        if tool_name == "get_my_tickets":
+            result = await nsp_connector.get_my_tickets(
+                user_email=user_email,
+                page=arguments.get("page", 1),
+                page_size=arguments.get("page_size", 15)
+            )
+        
+        elif tool_name == "get_open_tickets":
+            result = await nsp_connector.get_open_tickets(
+                page=arguments.get("page", 1),
+                page_size=arguments.get("page_size", 15)
+            )
+        
+        elif tool_name == "get_closed_tickets":
+            result = await nsp_connector.get_closed_tickets(
+                page=arguments.get("page", 1),
+                page_size=arguments.get("page_size", 15)
+            )
+        
+        elif tool_name == "get_tickets_by_status":
+            result = await nsp_connector.get_tickets_by_status(
+                status=arguments["status"],
+                page=arguments.get("page", 1),
+                page_size=arguments.get("page_size", 15)
+            )
+        
+        elif tool_name == "get_tickets_by_type":
+            result = await nsp_connector.get_tickets_by_type(
+                entity_type=arguments["entity_type"],
+                page=arguments.get("page", 1),
+                page_size=arguments.get("page_size", 15)
+            )
+        
+        elif tool_name == "get_tickets_by_stage":
+            result = await nsp_connector.get_tickets_by_stage(
+                entity_type=arguments["entity_type"],
+                stage=arguments["stage"],
+                page=arguments.get("page", 1),
+                page_size=arguments.get("page_size", 15)
+            )
+        
+        elif tool_name == "search_tickets":
+            result = await nsp_connector.search_tickets(
+                status=arguments.get("status"),
+                entity_type=arguments.get("entity_type"),
+                stage=arguments.get("stage"),
+                user_email=user_email,
+                page=arguments.get("page", 1),
+                page_size=arguments.get("page_size", 15)
+            )
+        
+        # Advanced functions
+        elif tool_name == "get_tickets":
             result = await nsp_connector.get_tickets(
                 page=arguments.get("page", 1),
                 page_size=arguments.get("page_size", 15),
@@ -614,7 +1018,7 @@ async def call_tool(tool_name: str, arguments: Dict[str, Any], user_email: str =
         
         elif tool_name == "get_tickets_by_role":
             result = await nsp_connector.get_tickets_by_role(
-                user_email=arguments["user_email"],
+                user_email=user_email,
                 role=arguments.get("role", "customer"),
                 page=arguments.get("page", 1),
                 page_size=arguments.get("page_size", 15),
@@ -623,7 +1027,7 @@ async def call_tool(tool_name: str, arguments: Dict[str, Any], user_email: str =
                 ticket_types=arguments.get("ticket_types")
             )
         
-        elif tool_name == "get_tickets_by_status":
+        elif tool_name == "get_tickets_by_status_advanced":
             result = await nsp_connector.get_tickets_by_status(
                 status=arguments.get("status", "open"),
                 page=arguments.get("page", 1),
@@ -635,12 +1039,12 @@ async def call_tool(tool_name: str, arguments: Dict[str, Any], user_email: str =
         
         elif tool_name == "get_user_by_email":
             result = await nsp_connector.get_user_by_email(
-                user_email=arguments["user_email"]
+                user_email=user_email
             )
         
         elif tool_name == "get_ticket_by_id":
             result = await nsp_connector.get_ticket_by_id(
-                ticket_id=arguments["ticket_id"]
+                ticket_id=int(arguments["ticket_id"])
             )
         
         elif tool_name == "create_ticket":
@@ -658,14 +1062,14 @@ async def call_tool(tool_name: str, arguments: Dict[str, Any], user_email: str =
         
         elif tool_name == "update_ticket":
             result = await nsp_connector.update_ticket(
-                ticket_id=arguments["ticket_id"],
+                ticket_id=int(arguments["ticket_id"]),
                 updates=arguments["updates"],
                 user_email=user_email
             )
         
         elif tool_name == "update_ticket_with_role":
             result = await nsp_connector.update_ticket_with_role(
-                ticket_id=arguments["ticket_id"],
+                ticket_id=int(arguments["ticket_id"]),
                 updates=arguments["updates"],
                 user_email=user_email,
                 role=arguments.get("role", "agent")
@@ -700,10 +1104,18 @@ async def call_tool(tool_name: str, arguments: Dict[str, Any], user_email: str =
         
         # Format result for MCP
         if result.get("success"):
-            return [{
-                "type": "text",
-                "text": json.dumps(result.get("data", result), indent=2, ensure_ascii=False)
-            }]
+            data = result.get("data", result)
+            # Handle case where data is an integer (like ticket ID)
+            if isinstance(data, int):
+                return [{
+                    "type": "text",
+                    "text": str(data)
+                }]
+            else:
+                return [{
+                    "type": "text",
+                    "text": json.dumps(data, indent=2, ensure_ascii=False)
+                }]
         else:
             return [{
                 "type": "text", 
