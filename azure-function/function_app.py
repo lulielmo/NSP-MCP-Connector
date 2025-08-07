@@ -8,6 +8,7 @@ import logging
 import json
 import os
 import httpx
+import asyncio
 from tenacity import retry, stop_after_attempt, wait_exponential
 from typing import Dict, Any, List, Optional
 from nsp_filtering_helpers import (
@@ -40,28 +41,24 @@ class NSPMCPConnector:
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
     async def _call_local_api(self, endpoint: str, method: str = 'POST', data: Dict = None) -> Dict[str, Any]:
         """Call local REST API via Hybrid Connection"""
-        url = f"{self.local_api_base}{endpoint}"
+        # Get Hybrid Connection endpoint from environment
+        hybrid_endpoint = os.environ.get('LOCAL_API_BASE', 'http://localhost:5000')
+        
+        # Construct full URL
+        url = f"{hybrid_endpoint.rstrip('/')}{endpoint}"
         
         try:
             async with httpx.AsyncClient(timeout=30.0) as client:
                 if method.upper() == 'GET':
                     response = await client.get(url)
-                elif method.upper() == 'PUT':
-                    response = await client.put(url, json=data or {})
                 else:
-                    response = await client.post(url, json=data or {})
+                    response = await client.post(url, json=data)
                 
                 response.raise_for_status()
                 return response.json()
                 
-        except httpx.RequestError as e:
-            logger.error(f"Error calling local API: {str(e)}")
-            raise
-        except httpx.HTTPStatusError as e:
-            logger.error(f"HTTP error calling local API: {e.response.status_code} - {e.response.text}")
-            raise
         except Exception as e:
-            logger.error(f"Unexpected error calling local API: {str(e)}")
+            logger.error(f"Error calling local API: {str(e)}")
             raise
     
     async def get_tickets(self, page: int = 1, page_size: int = 15, filters: Dict = None, 
@@ -866,7 +863,7 @@ MCP_TOOLS = [
     }
 ]
 
-@app.route(route="mcp")
+@app.route(route="mcp", auth_level=func.AuthLevel.FUNCTION)
 async def nsp_mcp_handler(req: func.HttpRequest) -> func.HttpResponse:
     """Main handler for MCP calls from Copilot Studio"""
     
@@ -1129,7 +1126,7 @@ async def call_tool(tool_name: str, arguments: Dict[str, Any], user_email: str =
             "text": f"Error calling {tool_name}: {str(e)}"
         }]
 
-@app.route(route="health")
+@app.route(route="health", auth_level=func.AuthLevel.FUNCTION)
 def health_check(req: func.HttpRequest) -> func.HttpResponse:
     """Health check endpoint"""
     return func.HttpResponse(

@@ -1,0 +1,26 @@
+version: '3.8'
+
+services:
+  nsp-local-server-test:
+    image: nsp-local-server:latest
+    container_name: nsp-local-server-test
+    ports:
+      - "5000:5000"
+    env_file:
+      - .env
+    environment:
+      - ENVIRONMENT=test
+      - LOG_LEVEL=DEBUG
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - nsp-test-network
+
+networks:
+  nsp-test-network:
+    driver: bridge

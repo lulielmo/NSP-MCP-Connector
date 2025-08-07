@@ -143,4 +143,7 @@ local.settings.json
 Thumbs.db
 
 # NSP specific
-*.datasource 
+*.datasource
+
+# Deployment status with sensitive information
+DEPLOYMENT_STATUS.md 
