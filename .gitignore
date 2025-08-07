@@ -145,5 +145,6 @@ Thumbs.db
 # NSP specific
 *.datasource
 
-# Deployment status with sensitive information
-DEPLOYMENT_STATUS.md 
+# Deployment status with sensitive information (exclude actual file but allow template)
+DEPLOYMENT_STATUS.md
+!DEPLOYMENT_STATUS.example.md 
