@@ -137,6 +137,7 @@ local.settings.json
 .idea/
 *.swp
 *.swo
+.vs/
 
 # OS
 .DS_Store
@@ -147,4 +148,4 @@ Thumbs.db
 
 # Deployment status with sensitive information (exclude actual file but allow template)
 DEPLOYMENT_STATUS.md
-!DEPLOYMENT_STATUS.example.md 
+!DEPLOYMENT_STATUS.example.md .vs/

@@ -23,11 +23,114 @@ from nsp_filtering_helpers import (
     get_filter_description
 )
 
+# Add user context management
+from collections import defaultdict
+import time
+
 # Configure logging
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Hybrid Connection configuration
-HYBRID_CONNECTION_ENDPOINT = os.environ.get('HYBRID_CONNECTION_ENDPOINT', 'http://localhost:5000')
+# User context cache for session management
+USER_CONTEXT_CACHE = {}
+CACHE_EXPIRY_HOURS = 24  # Cache user context for 24 hours
+
+class UserContext:
+    """Represents user context with permissions and data"""
+    def __init__(self, user_data: Dict[str, Any]):
+        self.user_id = user_data.get('Id')
+        self.user_type = user_data.get('UserTypeId')  # 'Agent' or 'End User'
+        self.display_name = user_data.get('DisplayName')
+        self.first_name = user_data.get('FirstName')
+        self.email = user_data.get('Email')
+        self.is_active = user_data.get('IsActive', False)
+        self.department = user_data.get('Department')
+        self.job_title = user_data.get('JobTitle')
+        self.cached_at = time.time()
+        
+    def is_agent(self) -> bool:
+        """Check if user is an agent"""
+        return self.user_type == 'Agent'
+    
+    def is_end_user(self) -> bool:
+        """Check if user is an end user"""
+        return self.user_type == 'End User'
+    
+    def can_list_own_tickets(self) -> bool:
+        """Check if user can list their own tickets"""
+        return self.is_active and (self.is_agent() or self.is_end_user())
+    
+    def can_list_assigned_tickets(self) -> bool:
+        """Check if user can list tickets assigned to them (agents only)"""
+        return self.is_active and self.is_agent()
+    
+    def can_create_tickets(self) -> bool:
+        """Check if user can create tickets"""
+        return self.is_active and (self.is_agent() or self.is_end_user())
+    
+    def can_update_tickets(self) -> bool:
+        """Check if user can update tickets (agents only)"""
+        return self.is_active and self.is_agent()
+    
+    def get_personalized_greeting(self) -> str:
+        """Get personalized greeting for the user"""
+        if self.first_name:
+            return f"Hej {self.first_name}!"
+        elif self.display_name:
+            return f"Hej {self.display_name}!"
+        else:
+            return "Hej!"
+
+async def get_user_context(user_email: str) -> Optional[UserContext]:
+    """Get user context from cache or fetch from NSP"""
+    if not user_email:
+        return None
+    
+    # Check cache first
+    if user_email in USER_CONTEXT_CACHE:
+        context = USER_CONTEXT_CACHE[user_email]
+        # Check if cache is still valid
+        if time.time() - context.cached_at < (CACHE_EXPIRY_HOURS * 3600):
+            logger.info(f"Using cached user context for {user_email}")
+            return context
+        else:
+            # Remove expired cache entry
+            del USER_CONTEXT_CACHE[user_email]
+    
+    # Fetch from NSP if not in cache
+    try:
+        logger.info(f"Fetching user context for {user_email}")
+        # Use the existing NSP connector to get user data
+        user_data = await nsp_connector.get_user_by_email(user_email)
+        if user_data:
+            context = UserContext(user_data)
+            USER_CONTEXT_CACHE[user_email] = context
+            logger.info(f"Cached user context for {user_email}: {context.user_type}")
+            return context
+        else:
+            logger.warning(f"User not found in NSP or API error: {user_email}")
+            return None
+    except Exception as e:
+        logger.error(f"Error fetching user context for {user_email}: {str(e)}")
+        return None
+
+def validate_user_permissions(user_context: UserContext, action: str, resource: str = None) -> bool:
+    """Validate user permissions for specific actions"""
+    if not user_context or not user_context.is_active:
+        return False
+    
+    permission_map = {
+        'list_own_tickets': user_context.can_list_own_tickets(),
+        'list_assigned_tickets': user_context.can_list_assigned_tickets(),
+        'create_ticket': user_context.can_create_tickets(),
+        'update_ticket': user_context.can_update_tickets(),
+        'get_user_info': True,  # Everyone can get their own info
+    }
+    
+    return permission_map.get(action, False)
+
+# API configuration - supports both local development and Azure deployment
+LOCAL_API_BASE = os.environ.get('LOCAL_API_BASE', 'http://localhost:5000')
 
 # Create Azure Function app
 app = func.FunctionApp()
@@ -36,29 +139,38 @@ class NSPMCPConnector:
     """MCP Connector for NSP that communicates with local REST API"""
     
     def __init__(self):
-        self.local_api_base = HYBRID_CONNECTION_ENDPOINT.rstrip('/')
+        self.local_api_base = LOCAL_API_BASE.rstrip('/')
     
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
     async def _call_local_api(self, endpoint: str, method: str = 'POST', data: Dict = None) -> Dict[str, Any]:
-        """Call local REST API via Hybrid Connection"""
-        # Get Hybrid Connection endpoint from environment
-        hybrid_endpoint = os.environ.get('LOCAL_API_BASE', 'http://localhost:5000')
+        """Call local REST API via Hybrid Connection or direct connection"""
+        # Construct full URL using the configured base
+        url = f"{self.local_api_base}{endpoint}"
         
-        # Construct full URL
-        url = f"{hybrid_endpoint.rstrip('/')}{endpoint}"
+        # Add detailed logging
+        logger.info(f"Calling local API: {method} {url}")
+        logger.info(f"Local API base: {self.local_api_base}")
+        logger.info(f"Endpoint: {endpoint}")
+        if data:
+            logger.info(f"Request data: {json.dumps(data, indent=2)}")
         
         try:
             async with httpx.AsyncClient(timeout=30.0) as client:
                 if method.upper() == 'GET':
+                    logger.info(f"Making GET request to: {url}")
                     response = await client.get(url)
                 else:
+                    logger.info(f"Making POST request to: {url}")
                     response = await client.post(url, json=data)
                 
+                logger.info(f"Response status: {response.status_code}")
                 response.raise_for_status()
                 return response.json()
                 
         except Exception as e:
             logger.error(f"Error calling local API: {str(e)}")
+            logger.error(f"URL attempted: {url}")
+            logger.error(f"Local API base used: {self.local_api_base}")
             raise
     
     async def get_tickets(self, page: int = 1, page_size: int = 15, filters: Dict = None, 
@@ -284,7 +396,17 @@ class NSPMCPConnector:
     async def get_user_by_email(self, user_email: str) -> Dict[str, Any]:
         """Get user information by email address"""
         data = {"email": user_email}
-        return await self._call_local_api('/api/get_user_by_email', data=data)
+        try:
+            result = await self._call_local_api('/api/get_user_by_email', data=data)
+            # Check if we got a successful response with data
+            if result and result.get('success') and result.get('data'):
+                return result['data']
+            else:
+                logger.error(f"Local API returned unsuccessful response: {result}")
+                return None
+        except Exception as e:
+            logger.error(f"Error calling local API for user {user_email}: {str(e)}")
+            return None
     
     async def get_tickets_by_role(self, user_email: str, role: str = "customer", page: int = 1, page_size: int = 15,
                                 sort_by: str = "CreatedDate", sort_direction: str = "desc", 
@@ -663,6 +785,15 @@ MCP_TOOLS = [
         }
     },
     {
+        "name": "get_my_info",
+        "description": "Get current user information and permissions",
+        "inputSchema": {
+            "type": "object",
+            "properties": {},
+            "required": []
+        }
+    },
+    {
         "name": "get_ticket_by_id",
         "description": "Get specific ticket by ID",
         "inputSchema": {
@@ -923,8 +1054,17 @@ async def nsp_mcp_handler(req: func.HttpRequest) -> func.HttpResponse:
             
             logger.info(f"Tool call: {tool_name}, User: {user_email or 'API account'}")
             
+            # Get user context for permission validation
+            user_context = None
+            if user_email:
+                user_context = await get_user_context(user_email)
+                if user_context:
+                    logger.info(f"User context: {user_context.user_type} - {user_context.display_name}")
+                else:
+                    logger.warning(f"Could not get user context for {user_email}")
+            
             # Call appropriate method based on tool name
-            result = await call_tool(tool_name, arguments, user_email)
+            result = await call_tool(tool_name, arguments, user_email, user_context)
             
             return func.HttpResponse(
                 json.dumps({"result": result}),
@@ -946,14 +1086,50 @@ async def nsp_mcp_handler(req: func.HttpRequest) -> func.HttpResponse:
             mimetype="application/json"
         )
 
-async def call_tool(tool_name: str, arguments: Dict[str, Any], user_email: str = None) -> List[Dict[str, Any]]:
+async def call_tool(tool_name: str, arguments: Dict[str, Any], user_email: str = None, user_context: UserContext = None) -> List[Dict[str, Any]]:
     """Call specific tool and return result"""
     
     try:
+        # Permission validation based on tool and user context
+        if user_context:
+            # Define permission requirements for each tool
+            permission_requirements = {
+                'get_my_tickets': 'list_own_tickets',
+                'get_tickets_by_role': 'list_own_tickets',
+                'create_ticket': 'create_ticket',
+                'create_ticket_with_role': 'create_ticket',
+                'update_ticket': 'update_ticket',
+                'update_ticket_with_role': 'update_ticket',
+                'get_user_by_email': 'get_user_info',
+            }
+            
+            required_permission = permission_requirements.get(tool_name)
+            if required_permission and not validate_user_permissions(user_context, required_permission):
+                return [{
+                    "type": "error",
+                    "message": f"Du har inte behörighet att använda {tool_name}. Kontakta IT-support om du behöver hjälp."
+                }]
+            
+            # Add personalized greeting for user-friendly tools
+            if tool_name in ['get_my_tickets', 'get_tickets_by_role']:
+                greeting = user_context.get_personalized_greeting()
+                logger.info(f"User {user_context.email} ({user_context.user_type}) accessing {tool_name}")
+        
+        # Continue with tool execution
         # User-friendly functions
         if tool_name == "get_my_tickets":
-            result = await nsp_connector.get_my_tickets(
+            # Determine role based on user context
+            role = "customer"  # Default
+            if user_context:
+                if user_context.is_agent():
+                    # Ask user which role they want to use
+                    role = arguments.get("role", "customer")  # Default to customer view for agents
+                else:
+                    role = "customer"  # End users can only see their own tickets
+            
+            result = await nsp_connector.get_tickets_by_role(
                 user_email=user_email,
+                role=role,
                 page=arguments.get("page", 1),
                 page_size=arguments.get("page_size", 15)
             )
@@ -1038,6 +1214,34 @@ async def call_tool(tool_name: str, arguments: Dict[str, Any], user_email: str =
             result = await nsp_connector.get_user_by_email(
                 user_email=user_email
             )
+        
+        elif tool_name == "get_my_info":
+            if user_context:
+                result = {
+                    "success": True,
+                    "data": {
+                        "user_id": user_context.user_id,
+                        "user_type": user_context.user_type,
+                        "display_name": user_context.display_name,
+                        "first_name": user_context.first_name,
+                        "email": user_context.email,
+                        "department": user_context.department,
+                        "job_title": user_context.job_title,
+                        "is_active": user_context.is_active,
+                        "permissions": {
+                            "can_list_own_tickets": user_context.can_list_own_tickets(),
+                            "can_list_assigned_tickets": user_context.can_list_assigned_tickets(),
+                            "can_create_tickets": user_context.can_create_tickets(),
+                            "can_update_tickets": user_context.can_update_tickets(),
+                        },
+                        "greeting": user_context.get_personalized_greeting()
+                    }
+                }
+            else:
+                result = {
+                    "success": False,
+                    "error": "Ingen användarkontext tillgänglig. Kontrollera att du är inloggad."
+                }
         
         elif tool_name == "get_ticket_by_id":
             result = await nsp_connector.get_ticket_by_id(
@@ -1133,7 +1337,7 @@ def health_check(req: func.HttpRequest) -> func.HttpResponse:
         json.dumps({
             "status": "healthy",
             "service": "nsp-mcp-connector",
-            "hybrid_connection_endpoint": HYBRID_CONNECTION_ENDPOINT
+            "local_api_base": LOCAL_API_BASE
         }),
         mimetype="application/json"
     ) 
