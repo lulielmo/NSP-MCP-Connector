@@ -179,7 +179,51 @@ In Copilot Studio, add MCP server:
 2. Test calling NSP functions
 3. Verify that data is retrieved correctly
 
-## Step 6: Monitoring and Logging
+## Step 6: MCP Configuration
+
+### 6.1 Power Apps Custom Connector
+1. **Navigate to Power Apps**
+   - Go to [make.powerapps.com](https://make.powerapps.com)
+   - Select your environment
+
+2. **Create Custom Connector**
+   - Click **"Data"** → **"Custom Connectors"**
+   - Click **"+ New custom connector"**
+   - Select **"Import an OpenAPI file"**
+
+3. **Import Schema**
+   - Upload `nsp-mcp-schema-example.yaml`
+   - Review and confirm the import
+
+4. **Configure Security**
+   - **Authentication**: `API Key`
+   - **Parameter name**: `code`
+   - **Parameter location**: `Query`
+
+### 6.2 Test Custom Connector
+1. **Create Connection**
+   - Go to **"Test"** tab
+   - Click **"+ New connection"**
+   - Use your Azure Function key
+
+2. **Test Operations**
+   - **GetInvokeMCP**: Should return 200 OK with tool list
+   - **InvokeMCP**: Should handle MCP calls correctly
+   - **HealthCheck**: Should return healthy status
+
+### 6.3 Copilot Studio Integration
+1. **Add to Agent**
+   - Go to **"Tools"** section in Copilot Studio
+   - Click **"Add tools"**
+   - Select **"Import from Power Apps"**
+   - Choose your NSP-MCP-Connector
+
+2. **Configure Prompts**
+   - Set up system prompts explaining NSP capabilities
+   - Add conversation starters for common tasks
+   - Configure role-based access instructions
+
+## Step 7: Monitoring and Logging
 
 ### 6.1 Azure Application Insights
 ```bash

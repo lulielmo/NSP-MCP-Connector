@@ -1002,79 +1002,99 @@ async def nsp_mcp_handler(req: func.HttpRequest) -> func.HttpResponse:
         # Log incoming call
         logger.info(f"MCP call received: {req.method} {req.url}")
         
-        # Get request body
-        request_data = req.get_json()
-        
-        if not request_data:
+        # Handle GET requests (list tools)
+        if req.method == "GET":
+            logger.info("GET request to /mcp - returning list of tools")
             return func.HttpResponse(
-                json.dumps({"error": "No request data"}),
-                status_code=400,
+                json.dumps({
+                    "tools": [tool["name"] for tool in MCP_TOOLS],
+                    "result": MCP_TOOLS
+                }),
                 mimetype="application/json"
             )
         
-        # Handle different MCP operations
-        method = request_data.get("method")
-        params = request_data.get("params", {})
-        
-        if method == "tools/list":
-            # Return list of available tools
-            return func.HttpResponse(
-                json.dumps({"result": MCP_TOOLS}),
-                mimetype="application/json"
-            )
-        
-        elif method == "tools/call":
-            # Handle call to specific tool
-            tool_name = params.get("name")
-            arguments = params.get("arguments", {})
+        # Handle POST requests (MCP calls)
+        elif req.method == "POST":
+            # Get request body
+            request_data = req.get_json()
             
-            if not tool_name:
+            if not request_data:
                 return func.HttpResponse(
-                    json.dumps({"error": "Tool name missing"}),
+                    json.dumps({"error": "No request data"}),
                     status_code=400,
                     mimetype="application/json"
                 )
             
-            # Extract user information from Copilot context if available
-            # This might come from headers, context, or other sources depending on Copilot setup
-            user_email = None
+            # Handle different MCP operations
+            method = request_data.get("method")
+            params = request_data.get("params", {})
             
-            # Try to get user email from various possible sources
-            # 1. From request headers (if Copilot sets them)
-            user_email = req.headers.get('X-User-Email') or req.headers.get('User-Email')
+            if method == "tools/list":
+                # Return list of available tools
+                return func.HttpResponse(
+                    json.dumps({"result": MCP_TOOLS}),
+                    mimetype="application/json"
+                )
             
-            # 2. From arguments if explicitly provided
-            if not user_email and 'user_email' in arguments:
-                user_email = arguments.pop('user_email')
+            elif method == "tools/call":
+                # Handle call to specific tool
+                tool_name = params.get("name")
+                arguments = params.get("arguments", {})
+                
+                if not tool_name:
+                    return func.HttpResponse(
+                        json.dumps({"error": "Tool name missing"}),
+                        status_code=400,
+                        mimetype="application/json"
+                    )
+                
+                # Extract user information from Copilot context if available
+                # This might come from headers, context, or other sources depending on Copilot setup
+                user_email = None
+                
+                # Try to get user email from various possible sources
+                # 1. From request headers (if Copilot sets them)
+                user_email = req.headers.get('X-User-Email') or req.headers.get('User-Email')
+                
+                # 2. From arguments if explicitly provided
+                if not user_email and 'user_email' in arguments:
+                    user_email = arguments.pop('user_email')
+                
+                # 3. From context if available in request data
+                if not user_email and 'context' in request_data:
+                    context = request_data.get('context', {})
+                    user_email = context.get('user_email') or context.get('user', {}).get('email')
+                
+                logger.info(f"Tool call: {tool_name}, User: {user_email or 'API account'}")
+                
+                # Get user context for permission validation
+                user_context = None
+                if user_email:
+                    user_context = await get_user_context(user_email)
+                    if user_context:
+                        logger.info(f"User context: {user_context.user_type} - {user_context.display_name}")
+                    else:
+                        logger.warning(f"Could not get user context for {user_email}")
+                
+                # Call appropriate method based on tool name
+                result = await call_tool(tool_name, arguments, user_email, user_context)
+                
+                return func.HttpResponse(
+                    json.dumps({"result": result}),
+                    mimetype="application/json"
+                )
             
-            # 3. From context if available in request data
-            if not user_email and 'context' in request_data:
-                context = request_data.get('context', {})
-                user_email = context.get('user_email') or context.get('user', {}).get('email')
-            
-            logger.info(f"Tool call: {tool_name}, User: {user_email or 'API account'}")
-            
-            # Get user context for permission validation
-            user_context = None
-            if user_email:
-                user_context = await get_user_context(user_email)
-                if user_context:
-                    logger.info(f"User context: {user_context.user_type} - {user_context.display_name}")
-                else:
-                    logger.warning(f"Could not get user context for {user_email}")
-            
-            # Call appropriate method based on tool name
-            result = await call_tool(tool_name, arguments, user_email, user_context)
-            
-            return func.HttpResponse(
-                json.dumps({"result": result}),
-                mimetype="application/json"
-            )
+            else:
+                return func.HttpResponse(
+                    json.dumps({"error": f"Unknown method: {method}"}),
+                    status_code=400,
+                    mimetype="application/json"
+                )
         
         else:
             return func.HttpResponse(
-                json.dumps({"error": f"Unknown method: {method}"}),
-                status_code=400,
+                json.dumps({"error": f"Method {req.method} not allowed"}),
+                status_code=405,
                 mimetype="application/json"
             )
     
@@ -1340,4 +1360,27 @@ def health_check(req: func.HttpRequest) -> func.HttpResponse:
             "local_api_base": LOCAL_API_BASE
         }),
         mimetype="application/json"
-    ) 
+    )
+
+@app.route(route="tools/list", auth_level=func.AuthLevel.FUNCTION)
+def list_mcp_tools(req: func.HttpRequest) -> func.HttpResponse:
+    """List available MCP tools for discovery"""
+    try:
+        logger.info("MCP tools list requested")
+        
+        # Return list of available tools
+        return func.HttpResponse(
+            json.dumps({
+                "tools": [tool["name"] for tool in MCP_TOOLS],
+                "result": MCP_TOOLS
+            }),
+            mimetype="application/json"
+        )
+    
+    except Exception as e:
+        logger.error(f"Error listing MCP tools: {str(e)}")
+        return func.HttpResponse(
+            json.dumps({"error": str(e)}),
+            status_code=500,
+            mimetype="application/json"
+        ) 

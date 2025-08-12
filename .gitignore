@@ -109,6 +109,9 @@ venv/
 ENV/
 env.bak/
 venv.bak/
+# Ignore real configuration files
+nsp-mcp-schema.yaml
+local-config.yaml
 
 # Spyder project settings
 .spyderproject

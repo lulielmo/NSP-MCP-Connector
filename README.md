@@ -8,6 +8,28 @@ An MCP (Model Context Protocol) connector for NSP (Nilex Service Platform) Publi
 Copilot Studio → Azure Function (MCP) → Hybrid Connection → On-premise (REST) → NSP API
 ```
 
+## MCP Integration
+
+This connector now supports Microsoft Copilot Studio integration via MCP (Model Context Protocol):
+
+- **Azure Function MCP Server** - Handles MCP protocol communication
+- **Hybrid Connection** - Secure connection to on-premises systems
+- **Role-based Access Control** - Dynamic permissions based on user context
+- **Power Apps Custom Connector** - Ready for Copilot Studio integration
+
+### MCP Endpoints
+- `GET /api/mcp` - List available MCP tools
+- `POST /api/mcp` - Execute MCP tool calls
+- `GET /api/health` - Health check with connection status
+- `GET /api/tools/list` - Alternative tool listing endpoint
+
+### MCP Tools Available
+- **User Management**: `get_my_info`, `get_user_by_email`
+- **Ticket Management**: `get_my_tickets`, `get_open_tickets`, `get_closed_tickets`
+- **Advanced Search**: `search_tickets`, `get_tickets_by_status`, `get_tickets_by_type`
+- **Ticket Operations**: `create_ticket`, `update_ticket`
+- **Role-based Access**: Support for both customer and agent roles
+
 ## Project Structure
 
 ```
@@ -16,7 +38,9 @@ NSP-MCP-Connector/
 ├── local-server/           # Local REST API Server
 ├── shared/                 # Shared code between Azure and local
 ├── tests/                  # Tests
-└── docs/                   # Documentation
+├── docs/                   # Documentation
+├── nsp-mcp-schema-example.yaml  # Example OpenAPI schema for Power Apps
+└── .gitignore              # Git ignore rules
 ```
 
 ## Setup
