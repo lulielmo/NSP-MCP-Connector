@@ -34,10 +34,24 @@ class SmartTokenWarmer:
     def parse_token_expiry(self, expires_str: str) -> Optional[datetime]:
         """Parse NSP token expiry string to datetime"""
         try:
-            # Handle format: "2025-08-19T17:25:43.555542Z"
+            # Handle NSP format: "2025-08-19T21:54:41.6073688Z"
             if expires_str.endswith('Z'):
-                expires_str = expires_str.replace('Z', '+00:00')
+                # Remove Z and handle potential microsecond precision issues
+                clean_str = expires_str.rstrip('Z')
+                
+                # NSP sometimes returns 7 digits for microseconds, Python expects max 6
+                if '.' in clean_str:
+                    date_part, microsec_part = clean_str.split('.')
+                    # Truncate microseconds to 6 digits if longer
+                    if len(microsec_part) > 6:
+                        microsec_part = microsec_part[:6]
+                    clean_str = f"{date_part}.{microsec_part}"
+                
+                # Add UTC timezone
+                clean_str += '+00:00'
+                return datetime.fromisoformat(clean_str)
             
+            # Fallback for other formats
             return datetime.fromisoformat(expires_str)
         except Exception as e:
             logger.error(f"Failed to parse token expiry '{expires_str}': {e}")
