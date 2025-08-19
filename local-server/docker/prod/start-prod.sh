@@ -18,7 +18,7 @@ fi
 
 # Start production environment
 echo "🐳 Starting production container..."
-docker-compose -f docker-compose.prod.yml up -d
+docker compose -f docker-compose.prod.yml up -d
 
 # Check status
 echo "📊 Checking container status..."
