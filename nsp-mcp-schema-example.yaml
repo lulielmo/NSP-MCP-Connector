@@ -1,14 +1,11 @@
 swagger: '2.0'
 info:
   title: NSP MCP Connector
-  description: >-
-    MCP Server for NSP IT support system with user management, ticket management
-    and role-based access control
+  description: MCP Server test implementation for NSP IT support system with basic user information retrieval
   version: 1.0.0
   contact:
     name: NSP-MCP-Connector Project
     url: https://github.com/lulielmo/nsp-mcp-connector
-    description: Open source MCP connector for NSP IT support systems
 host: your-azure-function.azurewebsites.net
 basePath: /api
 schemes:
@@ -17,16 +14,22 @@ consumes:
   - application/json
 produces:
   - application/json
+securityDefinitions:
+  functionKey:
+    type: apiKey
+    name: code
+    in: query
+    description: Function Key for authentication against Azure Function
+security:
+  - functionKey: []
+
 paths:
   /mcp:
     post:
       summary: NSP MCP Server - Main endpoint for MCP communication
-      description: >
-        MCP Server that exposes NSP IT support functionality via Microsoft
-        Connector Protocol.
-
-        Supports user management, ticket management and role-based access
-        control.
+      description: |
+        MCP Server test implementation that exposes basic NSP user information via Microsoft Connector Protocol.
+        Test version with single tool for validation.
       x-ms-agentic-protocol: mcp-streamable-1.0
       operationId: InvokeMCP
       tags:
@@ -56,6 +59,7 @@ paths:
           description: Internal Server Error - Server error
           schema:
             $ref: '#/definitions/ErrorResponse'
+
   /health:
     get:
       summary: Health Check Endpoint
@@ -85,34 +89,7 @@ paths:
               local_api_base:
                 type: string
                 example: "http://localhost:5000"
-  /tools/list:
-    get:
-      summary: List Available MCP Tools
-      description: Lists all available MCP tools for discovery
-      operationId: ListMCPTools
-      tags:
-        - MCP
-        - Tools
-        - Discovery
-      parameters:
-        - name: code
-          in: query
-          required: true
-          type: string
-          description: Function Key for authentication
-      responses:
-        '200':
-          description: List of available MCP tools
-          schema:
-            $ref: '#/definitions/MCPToolsResponse'
-        '401':
-          description: Unauthorized - Invalid Function Key
-          schema:
-            $ref: '#/definitions/ErrorResponse'
-        '500':
-          description: Internal Server Error
-          schema:
-            $ref: '#/definitions/ErrorResponse'
+
 definitions:
   MCPRequest:
     type: object
@@ -128,12 +105,10 @@ definitions:
         example: "tools/list"
       params:
         $ref: '#/definitions/MCPParams'
-      context:
-        $ref: '#/definitions/MCPContext'
     example:
       method: "tools/list"
       params: {}
-      context: {}
+
   MCPParams:
     type: object
     properties:
@@ -144,45 +119,20 @@ definitions:
       arguments:
         type: object
         description: Arguments for the MCP tool
-        additionalProperties: true
-  MCPContext:
-    type: object
-    properties:
-      user_email:
-        type: string
-        description: User's email address from Microsoft Entra ID
-        example: "user@example.com"
-      user:
-        type: object
         properties:
-          email:
+          user_email:
             type: string
             description: User's email address
             example: "user@example.com"
+        additionalProperties: true
+
   MCPResponse:
     type: object
     properties:
       result:
-        type: array
-        description: Array with MCP response objects
-        items:
-          $ref: '#/definitions/MCPResultItem'
-  MCPResultItem:
-    type: object
-    required:
-      - type
-    properties:
-      type:
-        type: string
-        enum:
-          - text
-          - error
-        description: Type of response
-        example: "text"
-      text:
-        type: string
-        description: Response text or error message
-        example: "User information retrieved successfully"
+        description: MCP response data - can be array (tools/list) or object (tool results)
+        additionalProperties: true
+
   ErrorResponse:
     type: object
     properties:
@@ -190,225 +140,25 @@ definitions:
         type: string
         description: Error message
         example: "Invalid MCP request"
-  MCPToolsResponse:
-    type: object
-    properties:
-      tools:
-        type: array
-        description: List of available MCP tools
-        items:
-          type: string
-          description: Name of the MCP tool
-      result:
-        type: array
-        description: Array with MCP tool definitions
-        items:
-          $ref: '#/definitions/MCPTool'
-  MCPTool:
-    type: object
-    properties:
-      name:
-        type: string
-        description: Name of the MCP tool
-      description:
-        type: string
-        description: Description of what the tool does
-      inputSchema:
-        type: object
-        description: Input schema for the tool
-        properties:
-          type:
-            type: string
-            description: Schema type
-          properties:
-            type: object
-            description: Tool properties
-          required:
-            type: array
-            items:
-              type: string
-            description: Required properties
-parameters: {}
-responses: {}
-securityDefinitions:
-  api_key:
-    type: apiKey
-    in: query
-    name: code
-security:
-  - api_key: []
-tags: []
+
+# MCP Tools that are exposed
 x-ms-mcp-tools:
   - name: get_my_info
     description: Get current user information and permissions
     inputSchema:
       type: object
-      properties: {}
-      required: []
-  - name: get_my_tickets
-    description: Get tickets for current user (as customer or agent)
-    inputSchema:
-      type: object
-      properties:
-        role:
-          type: string
-          enum:
-            - customer
-            - agent
-          description: Role to use for tickets
-          default: customer
-        page:
-          type: integer
-          description: Page number
-          default: 1
-        page_size:
-          type: integer
-          description: Number of tickets per page
-          default: 15
-      required: []
-  - name: get_open_tickets
-    description: Get all open IT tickets
-    inputSchema:
-      type: object
-      properties:
-        page:
-          type: integer
-          description: Page number
-          default: 1
-        page_size:
-          type: integer
-          description: Number of tickets per page
-          default: 15
-      required: []
-  - name: get_closed_tickets
-    description: Get all closed IT tickets
-    inputSchema:
-      type: object
-      properties:
-        page:
-          type: integer
-          description: Page number
-          default: 1
-        page_size:
-          type: integer
-          description: Number of tickets per page
-          default: 15
-      required: []
-  - name: get_tickets_by_status
-    description: Get tickets by status
-    inputSchema:
-      type: object
-      properties:
-        status:
-          type: string
-          description: Status to filter by
-          enum:
-            - New
-            - Registered
-            - Assigned
-            - In progress
-            - Pending
-            - Resolved
-            - Closed
-        page:
-          type: integer
-          description: Page number
-          default: 1
-        page_size:
-          type: integer
-          description: Number of tickets per page
-          default: 15
-      required:
-        - status
-  - name: get_tickets_by_type
-    description: Get tickets by type
-    inputSchema:
-      type: object
-      properties:
-        entity_type:
-          type: string
-          description: Ticket type
-          enum:
-            - Ticket
-            - ServiceOrderRequest
-            - Incident
-        page:
-          type: integer
-          description: Page number
-          default: 1
-        page_size:
-          type: integer
-          description: Number of tickets per page
-          default: 15
-      required:
-        - entity_type
-  - name: search_tickets
-    description: Advanced search among tickets
-    inputSchema:
-      type: object
-      properties:
-        status:
-          type: string
-          description: Status filter (optional)
-        entity_type:
-          type: string
-          description: Ticket type filter (optional)
-        stage:
-          type: string
-          description: Stage filter (optional)
-        user_email:
-          type: string
-          description: User filter (optional)
-        page:
-          type: integer
-          description: Page number
-          default: 1
-        page_size:
-          type: integer
-          description: Number of tickets per page
-          default: 15
-      required: []
-  - name: create_ticket
-    description: Create new IT ticket
-    inputSchema:
-      type: object
-      properties:
-        title:
-          type: string
-          description: Ticket title
-        description:
-          type: string
-          description: Ticket description
-        priority:
-          type: string
-          description: Priority
-          enum:
-            - Low
-            - Medium
-            - High
-            - Critical
-        category:
-          type: string
-          description: Category
-      required:
-        - title
-        - description
-  - name: get_user_by_email
-    description: Get user information by email address
-    inputSchema:
-      type: object
       properties:
         user_email:
           type: string
-          description: Email address to search for
+          description: User's email address
       required:
         - user_email
+
+# Metadata for MCP Server
 x-ms-mcp-metadata:
   serverType: "NSP IT Support"
   capabilities:
     - userContext
-    - roleBasedAccess
-    - ticketManagement
     - userManagement
   authentication:
     type: "functionKey"
@@ -418,9 +168,7 @@ x-ms-mcp-metadata:
     version: "1.0"
     description: "Streamable MCP transport (recommended)"
   description: |
-    NSP MCP Server provides access to IT support system functionality including:
-    - User management and authentication
-    - Ticket creation and management
-    - Role-based access control (Agent/End User)
-    - Advanced search and filtering
+    NSP MCP Server test implementation with simplified functionality:
+    - User information retrieval
+    - Basic user context management
     - Hybrid connection to on-premises NSP system

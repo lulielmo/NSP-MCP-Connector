@@ -8,20 +8,33 @@ An MCP (Model Context Protocol) connector for NSP (Nilex Service Platform) Publi
 Copilot Studio → Azure Function (MCP) → Hybrid Connection → On-premise (REST) → NSP API
 ```
 
-## MCP Integration
+## 🤖 Copilot Studio Integration (KOMPLETT)
 
-This connector now supports Microsoft Copilot Studio integration via MCP (Model Context Protocol):
+✅ **Fullt funktionell MCP integration med Microsoft Copilot Studio** (2025-08-19)
 
-- **Azure Function MCP Server** - Handles MCP protocol communication
-- **Hybrid Connection** - Secure connection to on-premises systems
-- **Role-based Access Control** - Dynamic permissions based on user context
-- **Power Apps Custom Connector** - Ready for Copilot Studio integration
+### **Verifierade Klienter**
+- **MCP Inspector** ✅ - Utveckling och testning
+- **Microsoft Copilot Studio** ✅ - Produktionsanvändning via Custom Connectors
+
+### **Tekniska Funktioner**
+- **Azure Function MCP Server** - Hanterar MCP-protokoll kommunikation
+- **Smart Client Detection** - Automatisk kompatibilitet mellan olika MCP-klienter
+- **ID Type Handling** - Konverterar ID-typer baserat på klient (integer ↔ string)
+- **Hybrid Connection** - Säker anslutning till on-premise system
+- **Role-based Access Control** - Dynamiska behörigheter baserat på användarkontext
+- **Timeout Workarounds** - Hanterar NSP authentication delay med token caching
+
+### **Dokumentation**
+- **[COPILOT_STUDIO_INTEGRATION.md](COPILOT_STUDIO_INTEGRATION.md)** - Komplett setup guide för Copilot Studio
+- **[MCP_CLIENT_COMPATIBILITY.md](MCP_CLIENT_COMPATIBILITY.md)** - Client detection och kompatibilitet
+- **[TROUBLESHOOTING.md](TROUBLESHOOTING.md)** - Felsökning och vanliga problem
+- **[NSP_API_WORKAROUNDS.md](NSP_API_WORKAROUNDS.md)** - Timeout workarounds och NSP-specifika lösningar
+- **[DEPLOYMENT_STATUS.md](DEPLOYMENT_STATUS.md)** - Aktuell deployment status och konfiguration
 
 ### MCP Endpoints
 - `GET /api/mcp` - List available MCP tools
 - `POST /api/mcp` - Execute MCP tool calls
 - `GET /api/health` - Health check with connection status
-- `GET /api/tools/list` - Alternative tool listing endpoint
 
 ### MCP Tools Available
 - **User Management**: `get_my_info`, `get_user_by_email`
