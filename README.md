@@ -176,4 +176,55 @@ Deploy as Docker container or Windows Service.
 - `GET /api/get_entity_metadata/<type>` - Get metadata for entity type
 
 ### Attachments
-- `GET /api/get_attachments/<type>/<id>` - Get attachments for entity 
+- `GET /api/get_attachments/<type>/<id>` - Get attachments for entity
+
+### Cache Management
+- `GET /api/cache/stats` - Get user cache statistics
+- `POST /api/cache/clear` - Clear user cache
+- `POST /api/cache/warm` - Pre-warm cache with specific users
+
+### Token Pre-warming
+- `GET /api/prewarming/status` - Get token pre-warming status
+- `POST /api/prewarming/start` - Start token pre-warming
+- `POST /api/prewarming/stop` - Stop token pre-warming
+- `POST /api/prewarming/refresh` - Force immediate token refresh
+
+## 🧪 Testing
+
+The project includes comprehensive test suites:
+
+### Test Files
+- `tests/test_cache.py` - User cache functionality tests
+- `tests/test_token_prewarming.py` - Token pre-warming system tests
+- `tests/test_local_server_consolidated.py` - Local server API tests
+- `tests/test_user_scenarios_consolidated.py` - End-to-end user scenarios
+- `tests/test_azure_function_consolidated.py` - Azure Function MCP tests
+- `tests/test_nsp_direct.py` - Direct NSP API tests
+
+### Running Tests
+```bash
+# Test user cache functionality
+python tests/test_cache.py
+
+# Test token pre-warming system
+python tests/test_token_prewarming.py
+
+# Test local server endpoints
+python tests/test_local_server_consolidated.py
+
+# Test user scenarios
+python tests/test_user_scenarios_consolidated.py
+```
+
+### Test Configuration
+Set up test users and pre-warming in `local-server/.env`:
+```bash
+# Test users
+TEST_USER_EMAIL=user@company.com
+TEST_CUSTOMER_1_EMAIL=customer1@company.com
+TEST_CUSTOMER_2_EMAIL=customer2@company.com
+
+# Token pre-warming
+PREWARMING_ENABLED=true
+PREWARMING_REFRESH_BUFFER=5
+``` 

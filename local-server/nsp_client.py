@@ -11,8 +11,102 @@ from dataclasses import dataclass
 from tenacity import retry, stop_after_attempt, wait_exponential
 from datetime import datetime, timezone, timedelta
 import time
+import threading
+from functools import lru_cache
 
 logger = logging.getLogger(__name__)
+
+@dataclass
+class CachedUser:
+    """Represents a cached user lookup result"""
+    user_data: Dict[str, Any]
+    cached_at: datetime
+    email: str
+
+    def is_expired(self, ttl_minutes: int = 30) -> bool:
+        """Check if cache entry is expired"""
+        age = datetime.now(timezone.utc) - self.cached_at
+        return age > timedelta(minutes=ttl_minutes)
+
+class UserCache:
+    """Thread-safe cache for user lookups"""
+    
+    def __init__(self, ttl_minutes: int = 30, max_size: int = 100):
+        self._cache: Dict[str, CachedUser] = {}
+        self._lock = threading.RLock()
+        self.ttl_minutes = ttl_minutes
+        self.max_size = max_size
+        
+    def get(self, email: str) -> Optional[Dict[str, Any]]:
+        """Get user from cache if exists and not expired"""
+        with self._lock:
+            email_key = email.lower()
+            if email_key in self._cache:
+                cached_user = self._cache[email_key]
+                if not cached_user.is_expired(self.ttl_minutes):
+                    logger.debug(f"Cache HIT for user: {email}")
+                    return cached_user.user_data
+                else:
+                    # Remove expired entry
+                    logger.debug(f"Cache EXPIRED for user: {email}")
+                    del self._cache[email_key]
+            
+            logger.debug(f"Cache MISS for user: {email}")
+            return None
+    
+    def put(self, email: str, user_data: Dict[str, Any]) -> None:
+        """Store user in cache"""
+        with self._lock:
+            # Clean up if we're at max size
+            if len(self._cache) >= self.max_size:
+                self._cleanup_oldest()
+            
+            email_key = email.lower()
+            self._cache[email_key] = CachedUser(
+                user_data=user_data,
+                cached_at=datetime.now(timezone.utc),
+                email=email
+            )
+            logger.debug(f"Cache STORE for user: {email}")
+    
+    def _cleanup_oldest(self) -> None:
+        """Remove oldest cache entries to make room"""
+        if not self._cache:
+            return
+            
+        # Remove oldest 25% of entries
+        entries_to_remove = max(1, len(self._cache) // 4)
+        oldest_keys = sorted(
+            self._cache.keys(), 
+            key=lambda k: self._cache[k].cached_at
+        )[:entries_to_remove]
+        
+        for key in oldest_keys:
+            del self._cache[key]
+        
+        logger.debug(f"Cache cleanup: removed {len(oldest_keys)} old entries")
+    
+    def clear(self) -> None:
+        """Clear all cache entries"""
+        with self._lock:
+            self._cache.clear()
+            logger.debug("Cache cleared")
+    
+    def stats(self) -> Dict[str, Any]:
+        """Get cache statistics"""
+        with self._lock:
+            now = datetime.now(timezone.utc)
+            expired_count = sum(
+                1 for cached_user in self._cache.values() 
+                if cached_user.is_expired(self.ttl_minutes)
+            )
+            return {
+                "total_entries": len(self._cache),
+                "expired_entries": expired_count,
+                "active_entries": len(self._cache) - expired_count,
+                "ttl_minutes": self.ttl_minutes,
+                "max_size": self.max_size
+            }
 
 @dataclass
 class AuthToken:
@@ -72,6 +166,9 @@ class NSPClient:
         self.password = password
         self.auth_token = AuthToken()
         self.session = requests.Session()
+        
+        # Initialize user cache
+        self.user_cache = UserCache(ttl_minutes=30, max_size=100)
         self.session.headers.update({
             'Content-Type': 'application/json',
             'Accept': 'application/json',
@@ -512,10 +609,50 @@ class NSPClient:
             "expires": self.auth_token.expires,
             "is_expired": self.auth_token.is_expired(),
             "username": self.username
-        } 
+        }
+    
+    def get_cache_stats(self) -> Dict[str, Any]:
+        """Get user cache statistics"""
+        return self.user_cache.stats()
+    
+    def clear_user_cache(self) -> None:
+        """Clear the user cache"""
+        self.user_cache.clear()
+        logger.info("User cache cleared")
+    
+    def warm_user_cache(self, emails: List[str]) -> Dict[str, bool]:
+        """Pre-warm cache with specific users"""
+        results = {}
+        for email in emails:
+            try:
+                user = self.get_user_by_email(email)
+                if user:
+                    results[email] = True
+                    user_id = user.get('Id', 'Unknown')
+                    user_name = user.get('FullName', 'Unknown')
+                    logger.info(f"Cache warming for {email}: success -> {user_name} (ID: {user_id})")
+                else:
+                    results[email] = False
+                    logger.info(f"Cache warming for {email}: not found")
+            except Exception as e:
+                results[email] = False
+                logger.error(f"Cache warming failed for {email}: {str(e)}")
+        
+        return results 
 
     def get_user_by_email(self, email: str) -> Dict[str, Any]:
-        """Get user information by email address"""
+        """Get user information by email address with caching"""
+        # Check cache first
+        cached_user = self.user_cache.get(email)
+        if cached_user is not None:
+            user_id = cached_user.get('Id', 'Unknown')
+            user_name = cached_user.get('FullName', 'Unknown')
+            logger.info(f"Returning cached user data for: {email} -> {user_name} (ID: {user_id})")
+            return cached_user
+        
+        # Cache miss - fetch from NSP API
+        logger.info(f"Cache miss - fetching user from NSP API: {email}")
+        
         query_data = {
             "EntityType": "Person",
             "columns": [
@@ -555,9 +692,17 @@ class NSPClient:
             # Find exact email match
             for user in users:
                 if user.get('Email', '').lower() == email.lower():
+                    # Store in cache before returning
+                    self.user_cache.put(email, user)
+                    user_id = user.get('Id', 'Unknown')
+                    user_name = user.get('FullName', 'Unknown')
+                    logger.info(f"User found and cached: {email} -> {user_name} (ID: {user_id})")
                     return user
             
+            # No user found - cache the null result temporarily (shorter TTL)
+            logger.info(f"User not found: {email}")
             return None
+            
         except Exception as e:
             logger.error(f"Error looking up user by email {email}: {str(e)}")
             return None

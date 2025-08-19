@@ -9,6 +9,7 @@ import logging
 import os
 from dotenv import load_dotenv
 from nsp_client import NSPClient
+from token_prewarming import SmartTokenWarmer
 
 # Load environment variables
 load_dotenv()
@@ -30,6 +31,19 @@ nsp_client = NSPClient(
     password=os.getenv('NSP_PASSWORD', '')
 )
 
+# Initialize token pre-warming
+token_warmer = SmartTokenWarmer(nsp_client)
+
+# Start pre-warming if enabled
+if os.getenv('PREWARMING_ENABLED', 'true').lower() == 'true':
+    startup_success = token_warmer.start_prewarming()
+    if startup_success:
+        logger.info("🔥 Token pre-warming system started successfully")
+    else:
+        logger.error("❌ Failed to start token pre-warming system")
+else:
+    logger.info("Token pre-warming disabled via PREWARMING_ENABLED=false")
+
 @app.before_request
 def authenticate_if_needed():
     """Authenticate against NSP if token is missing or expired"""
@@ -48,6 +62,9 @@ def authenticate_if_needed():
 def health_check():
     """Health check endpoint"""
     token_info = nsp_client.get_token_info()
+    cache_stats = nsp_client.get_cache_stats()
+    prewarming_status = token_warmer.get_status()
+    
     return jsonify({
         "status": "healthy",
         "service": "nsp-local-api",
@@ -56,6 +73,11 @@ def health_check():
             "has_token": token_info['has_token'],
             "expires": token_info['expires'],
             "is_expired": token_info['is_expired']
+        },
+        "user_cache": cache_stats,
+        "prewarming": {
+            "active": prewarming_status['prewarming_active'],
+            "next_refresh_in_minutes": prewarming_status['schedule']['next_refresh_in_minutes']
         }
     })
 
@@ -553,6 +575,150 @@ def not_found(error):
         "success": False,
         "error": "Endpoint not found"
     }), 404
+
+@app.route('/api/cache/stats', methods=['GET'])
+def get_cache_stats():
+    """Get user cache statistics"""
+    try:
+        stats = nsp_client.get_cache_stats()
+        return jsonify({
+            "success": True,
+            "data": stats
+        })
+    except Exception as e:
+        logger.error(f"Error getting cache stats: {str(e)}")
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
+
+@app.route('/api/cache/clear', methods=['POST'])
+def clear_cache():
+    """Clear user cache"""
+    try:
+        nsp_client.clear_user_cache()
+        return jsonify({
+            "success": True,
+            "message": "User cache cleared"
+        })
+    except Exception as e:
+        logger.error(f"Error clearing cache: {str(e)}")
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
+
+@app.route('/api/cache/warm', methods=['POST'])
+def warm_cache():
+    """Pre-warm cache with specific users"""
+    try:
+        data = request.get_json() or {}
+        emails = data.get('emails', [])
+        
+        if not emails or not isinstance(emails, list):
+            return jsonify({
+                "success": False,
+                "error": "emails array required"
+            }), 400
+        
+        results = nsp_client.warm_user_cache(emails)
+        successful_count = sum(1 for success in results.values() if success)
+        
+        return jsonify({
+            "success": True,
+            "message": f"Cache warming completed: {successful_count}/{len(emails)} successful",
+            "results": results
+        })
+    except Exception as e:
+        logger.error(f"Error warming cache: {str(e)}")
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
+
+@app.route('/api/prewarming/status', methods=['GET'])
+def prewarming_status():
+    """Get token pre-warming system status"""
+    try:
+        status = token_warmer.get_status()
+        return jsonify({
+            "success": True,
+            "data": status
+        })
+    except Exception as e:
+        logger.error(f"Error getting prewarming status: {str(e)}")
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
+
+@app.route('/api/prewarming/start', methods=['POST'])
+def start_prewarming():
+    """Start token pre-warming system"""
+    try:
+        if token_warmer.running:
+            return jsonify({
+                "success": True,
+                "message": "Pre-warming already running"
+            })
+        
+        success = token_warmer.start_prewarming()
+        
+        if success:
+            return jsonify({
+                "success": True,
+                "message": "Token pre-warming started successfully"
+            })
+        else:
+            return jsonify({
+                "success": False,
+                "error": "Failed to start token pre-warming"
+            }), 500
+    except Exception as e:
+        logger.error(f"Error starting prewarming: {str(e)}")
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
+
+@app.route('/api/prewarming/stop', methods=['POST'])
+def stop_prewarming():
+    """Stop token pre-warming system"""
+    try:
+        token_warmer.stop_prewarming()
+        return jsonify({
+            "success": True,
+            "message": "Token pre-warming stopped"
+        })
+    except Exception as e:
+        logger.error(f"Error stopping prewarming: {str(e)}")
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
+
+@app.route('/api/prewarming/refresh', methods=['POST'])
+def force_token_refresh():
+    """Force immediate token refresh"""
+    try:
+        success = token_warmer.force_refresh()
+        
+        if success:
+            return jsonify({
+                "success": True,
+                "message": "Token refresh initiated"
+            })
+        else:
+            return jsonify({
+                "success": False,
+                "error": "Pre-warming not active - cannot force refresh"
+            }), 400
+    except Exception as e:
+        logger.error(f"Error forcing token refresh: {str(e)}")
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
 
 @app.errorhandler(500)
 def internal_error(error):
