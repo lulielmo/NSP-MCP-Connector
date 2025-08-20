@@ -419,25 +419,33 @@ def get_tickets_by_role():
 
 @app.route('/api/get_tickets_by_status', methods=['POST'])
 def get_tickets_by_status():
-    """Get IT-related tickets filtered by status (open or closed) with customizable sorting and type filtering"""
+    """Get IT-related tickets filtered by specific status with customizable sorting and type filtering"""
     try:
         data = request.get_json() or {}
-        status = data.get('status', 'open')  # Default to open tickets
+        status = data.get('status')
         page = data.get('page', 1)
         page_size = data.get('page_size', 15)
         sort_by = data.get('sort_by', 'CreatedDate')
         sort_direction = data.get('sort_direction', 'desc')  # Default to desc for newest first
         ticket_types = data.get('ticket_types')  # Optional: specific IT ticket types
         
-        if status not in ['open', 'closed']:
+        if not status:
             return jsonify({
                 "success": False,
-                "error": "Status must be 'open' or 'closed'"
+                "error": "Status required"
             }), 400
         
-        logger.info(f"Getting {status} IT tickets, sorted by {sort_by} {sort_direction}, types={ticket_types}")
+        logger.info(f"Getting tickets with status '{status}', sorted by {sort_by} {sort_direction}, types={ticket_types}")
         
-        result = nsp_client.get_it_tickets_by_status(status, page, page_size, sort_by, sort_direction, ticket_types)
+        # Try specific status first, fallback to open/closed if needed
+        try:
+            result = nsp_client.get_it_tickets_by_specific_status(status, page, page_size, sort_by, sort_direction, ticket_types)
+        except ValueError as ve:
+            # If specific status fails, try open/closed for backward compatibility
+            if status.lower() in ['open', 'closed']:
+                result = nsp_client.get_it_tickets_by_status(status, page, page_size, sort_by, sort_direction, ticket_types)
+            else:
+                raise ve
         
         return jsonify({
             "success": True,
@@ -452,6 +460,299 @@ def get_tickets_by_status():
         
     except Exception as e:
         logger.error(f"Error getting IT tickets by status: {str(e)}")
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
+
+@app.route('/api/get_tickets_by_type', methods=['POST'])
+def get_tickets_by_type():
+    """Get IT-related tickets filtered by specific ticket type with customizable sorting"""
+    try:
+        data = request.get_json() or {}
+        ticket_type = data.get('ticket_type')
+        page = data.get('page', 1)
+        page_size = data.get('page_size', 15)
+        sort_by = data.get('sort_by', 'CreatedDate')
+        sort_direction = data.get('sort_direction', 'desc')  # Default to desc for newest first
+        
+        if not ticket_type:
+            return jsonify({
+                "success": False,
+                "error": "Ticket type required"
+            }), 400
+        
+        # Available ticket types
+        available_types = ['IT Request', 'ServiceOrderRequest', 'Incident Management']
+        if ticket_type not in available_types:
+            return jsonify({
+                "success": False,
+                "error": f"Invalid ticket type. Must be one of: {', '.join(available_types)}"
+            }), 400
+        
+        logger.info(f"Getting tickets of type '{ticket_type}', sorted by {sort_by} {sort_direction}")
+        
+        # Use get_it_tickets with specific ticket type filter
+        result = nsp_client.get_it_tickets(page=page, page_size=page_size, 
+                                         sort_by=sort_by, sort_direction=sort_direction,
+                                         ticket_types=[ticket_type])
+        
+        return jsonify({
+            "success": True,
+            "data": result.get('Data', []),  # NSP returns data in 'Data' field
+            "pagination": {
+                "page": page,
+                "page_size": page_size,
+                "total_count": result.get('Total', 0)  # NSP returns total in 'Total' field
+            },
+            "ticket_type": ticket_type
+        })
+        
+    except Exception as e:
+        logger.error(f"Error getting tickets by type: {str(e)}")
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
+
+@app.route('/api/get_tickets_by_role_and_status', methods=['POST'])
+def get_tickets_by_role_and_status():
+    """Get tickets filtered by both user role and status"""
+    try:
+        data = request.get_json() or {}
+        user_email = data.get('user_email')
+        role = data.get('role', 'customer')
+        status = data.get('status')
+        page = data.get('page', 1)
+        page_size = data.get('page_size', 15)
+        sort_by = data.get('sort_by', 'CreatedDate')
+        sort_direction = data.get('sort_direction', 'desc')
+        
+        if not user_email:
+            return jsonify({
+                "success": False,
+                "error": "User email required"
+            }), 400
+            
+        if not status:
+            return jsonify({
+                "success": False,
+                "error": "Status required"
+            }), 400
+        
+        if role not in ['customer', 'agent']:
+            return jsonify({
+                "success": False,
+                "error": "Role must be 'customer' or 'agent'"
+            }), 400
+        
+        logger.info(f"Getting tickets for user {user_email} as {role} with status '{status}'")
+        
+        result = nsp_client.get_tickets_by_user_role_and_status(user_email, role, status, page, page_size, sort_by, sort_direction)
+        
+        return jsonify({
+            "success": True,
+            "data": result.get('Data', []),
+            "pagination": {
+                "page": page,
+                "page_size": page_size,
+                "total_count": result.get('Total', 0)
+            },
+            "user_role": role,
+            "user_email": user_email,
+            "status": status
+        })
+        
+    except Exception as e:
+        logger.error(f"Error getting tickets by role and status: {str(e)}")
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
+
+@app.route('/api/get_tickets_by_role_and_type', methods=['POST'])
+def get_tickets_by_role_and_type():
+    """Get tickets filtered by both user role and ticket type"""
+    try:
+        data = request.get_json() or {}
+        user_email = data.get('user_email')
+        role = data.get('role', 'customer')
+        ticket_type = data.get('ticket_type')
+        page = data.get('page', 1)
+        page_size = data.get('page_size', 15)
+        sort_by = data.get('sort_by', 'CreatedDate')
+        sort_direction = data.get('sort_direction', 'desc')
+        
+        if not user_email:
+            return jsonify({
+                "success": False,
+                "error": "User email required"
+            }), 400
+            
+        if not ticket_type:
+            return jsonify({
+                "success": False,
+                "error": "Ticket type required"
+            }), 400
+        
+        if role not in ['customer', 'agent']:
+            return jsonify({
+                "success": False,
+                "error": "Role must be 'customer' or 'agent'"
+            }), 400
+        
+        # Validate ticket type
+        available_types = ['IT Request', 'ServiceOrderRequest', 'Incident Management']
+        if ticket_type not in available_types:
+            return jsonify({
+                "success": False,
+                "error": f"Invalid ticket type. Must be one of: {', '.join(available_types)}"
+            }), 400
+        
+        logger.info(f"Getting tickets for user {user_email} as {role} with type '{ticket_type}'")
+        
+        result = nsp_client.get_tickets_by_user_role_and_type(user_email, role, ticket_type, page, page_size, sort_by, sort_direction)
+        
+        return jsonify({
+            "success": True,
+            "data": result.get('Data', []),
+            "pagination": {
+                "page": page,
+                "page_size": page_size,
+                "total_count": result.get('Total', 0)
+            },
+            "user_role": role,
+            "user_email": user_email,
+            "ticket_type": ticket_type
+        })
+        
+    except Exception as e:
+        logger.error(f"Error getting tickets by role and type: {str(e)}")
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
+
+@app.route('/api/search_tickets_advanced', methods=['POST'])
+def search_tickets_advanced():
+    """Advanced search for tickets with combined filtering by role, type, and status"""
+    try:
+        data = request.get_json() or {}
+        user_email = data.get('user_email')
+        role = data.get('role', 'customer')
+        ticket_type = data.get('ticket_type')  # Optional
+        status = data.get('status')  # Optional
+        page = data.get('page', 1)
+        page_size = data.get('page_size', 15)
+        sort_by = data.get('sort_by', 'CreatedDate')
+        sort_direction = data.get('sort_direction', 'desc')
+        
+        if not user_email:
+            return jsonify({
+                "success": False,
+                "error": "User email required"
+            }), 400
+        
+        if role not in ['customer', 'agent']:
+            return jsonify({
+                "success": False,
+                "error": "Role must be 'customer' or 'agent'"
+            }), 400
+        
+        # Validate ticket type if provided
+        if ticket_type:
+            available_types = ['IT Request', 'ServiceOrderRequest', 'Incident Management']
+            if ticket_type not in available_types:
+                return jsonify({
+                    "success": False,
+                    "error": f"Invalid ticket type. Must be one of: {', '.join(available_types)}"
+                }), 400
+        
+        logger.info(f"Advanced search for user {user_email} as {role}, type: {ticket_type}, status: {status}")
+        
+        result = nsp_client.search_tickets_by_user_role(user_email, role, ticket_type, status, page, page_size, sort_by, sort_direction)
+        
+        return jsonify({
+            "success": True,
+            "data": result.get('Data', []),
+            "pagination": {
+                "page": page,
+                "page_size": page_size,
+                "total_count": result.get('Total', 0)
+            },
+            "user_role": role,
+            "user_email": user_email,
+            "ticket_type": ticket_type,
+            "status": status
+        })
+        
+    except Exception as e:
+        logger.error(f"Error in advanced ticket search: {str(e)}")
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
+
+@app.route('/api/create_customer_ticket', methods=['POST'])
+def create_customer_ticket():
+    """Create a new IT Request ticket as a customer (enforces customer-only rule)"""
+    try:
+        data = request.get_json() or {}
+        user_email = data.get('user_email')
+        title = data.get('title')
+        description = data.get('description')
+        priority = data.get('priority', 'Medium')
+        
+        if not user_email:
+            return jsonify({
+                "success": False,
+                "error": "User email required"
+            }), 400
+            
+        if not title:
+            return jsonify({
+                "success": False,
+                "error": "Title required"
+            }), 400
+            
+        if not description:
+            return jsonify({
+                "success": False,
+                "error": "Description required"
+            }), 400
+        
+        # Validate priority
+        valid_priorities = ['Low', 'Medium', 'High', 'Critical']
+        if priority not in valid_priorities:
+            return jsonify({
+                "success": False,
+                "error": f"Invalid priority. Must be one of: {', '.join(valid_priorities)}"
+            }), 400
+        
+        logger.info(f"Creating IT Request ticket for customer {user_email}")
+        
+        # Prepare ticket data - always IT Request type for customers
+        ticket_data = {
+            "BaseHeader": title,
+            "BaseDescription": description,
+            "Priority": priority,
+            "Type": "IT Request"  # Always IT Request for customer-created tickets
+        }
+        
+        # Create ticket with customer role (always customer for this endpoint)
+        result = nsp_client.create_ticket_with_user_context(ticket_data, user_email, "customer")
+        
+        return jsonify({
+            "success": True,
+            "data": result.get('Data'),  # Ticket ID
+            "message": f"IT Request ticket created successfully",
+            "user_email": user_email,
+            "ticket_type": "IT Request",
+            "priority": priority
+        })
+        
+    except Exception as e:
+        logger.error(f"Error creating customer ticket: {str(e)}")
         return jsonify({
             "success": False,
             "error": str(e)

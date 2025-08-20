@@ -14,12 +14,67 @@ from typing import Dict, Any, List
 from mcp.server.lowlevel import Server
 from mcp.types import Tool, TextContent
 
+# Add user context management
+from collections import defaultdict
+import time
+
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # API configuration
 LOCAL_API_BASE = os.environ.get('LOCAL_API_BASE', 'http://localhost:5000')
+
+# User context cache for session management
+USER_CONTEXT_CACHE = {}
+CACHE_EXPIRY_HOURS = 24  # Cache user context for 24 hours
+
+class UserContext:
+    """Represents user context with permissions and data"""
+    def __init__(self, user_data: Dict[str, Any]):
+        self.user_id = user_data.get('Id')
+        self.user_type = user_data.get('UserTypeId')  # 'Agent' or 'End User'
+        self.display_name = user_data.get('DisplayName')
+        self.first_name = user_data.get('FirstName')
+        self.email = user_data.get('Email')
+        self.is_active = user_data.get('IsActive', False)
+        self.department = user_data.get('Department')
+        self.job_title = user_data.get('JobTitle')
+        self.cached_at = time.time()
+    
+    def is_cache_valid(self) -> bool:
+        """Check if user context cache is still valid"""
+        return (time.time() - self.cached_at) < (CACHE_EXPIRY_HOURS * 3600)
+    
+    def is_agent(self) -> bool:
+        """Check if user is an agent"""
+        return self.user_type and 'Agent' in str(self.user_type)
+    
+    def is_customer(self) -> bool:
+        """Check if user is a customer/end user"""
+        return self.user_type and 'End User' in str(self.user_type)
+    
+    def can_list_own_tickets(self) -> bool:
+        """Check if user can list their own tickets"""
+        return self.is_active and (self.is_agent() or self.is_customer())
+    
+    def can_list_assigned_tickets(self) -> bool:
+        """Check if user can list tickets assigned to them (agents only)"""
+        return self.is_active and self.is_agent()
+    
+    def can_create_tickets(self) -> bool:
+        """Check if user can create tickets"""
+        return self.is_active and (self.is_agent() or self.is_customer())
+    
+    def can_update_tickets(self) -> bool:
+        """Check if user can update tickets"""
+        return self.is_active and self.is_agent()
+    
+    def get_personalized_greeting(self) -> str:
+        """Get a personalized greeting for the user"""
+        name = self.first_name or self.display_name or "Användare"
+        role = "agent" if self.is_agent() else "kund"
+        return f"Hej {name}! Du är inloggad som {role}."
 
 # Create Azure Function app
 app = func.FunctionApp()
@@ -38,6 +93,166 @@ MCP_TOOLS = [
                 }
             },
             "required": ["user_email"]
+        }
+    ),
+    Tool(
+        name="get_my_tickets",
+        description="Get tickets based on user role - assigned tickets for agents, own tickets for customers",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "user_email": {
+                    "type": "string",
+                    "description": "User's email address"
+                },
+                "role": {
+                    "type": "string",
+                    "description": "User role: 'agent' or 'customer'",
+                    "enum": ["agent", "customer"]
+                },
+                "page": {
+                    "type": "integer",
+                    "description": "Page number for pagination",
+                    "default": 1
+                },
+                "page_size": {
+                    "type": "integer",
+                    "description": "Number of tickets per page",
+                    "default": 15
+                }
+            },
+            "required": ["user_email", "role"]
+        }
+    ),
+    Tool(
+        name="get_tickets_by_status",
+        description="Get tickets filtered by status with role-based access control",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "user_email": {
+                    "type": "string",
+                    "description": "User's email address"
+                },
+                "role": {
+                    "type": "string",
+                    "description": "User role: 'agent' or 'customer'",
+                    "enum": ["agent", "customer"]
+                },
+                "status": {
+                    "type": "string",
+                    "description": "Ticket status to filter by (e.g., 'Registered', 'In progress', 'Resolved', 'Closed')"
+                },
+                "page": {
+                    "type": "integer",
+                    "description": "Page number for pagination",
+                    "default": 1
+                },
+                "page_size": {
+                    "type": "integer",
+                    "description": "Number of tickets per page",
+                    "default": 15
+                }
+            },
+            "required": ["user_email", "role", "status"]
+        }
+    ),
+    Tool(
+        name="get_tickets_by_type",
+        description="Get tickets filtered by type with role-based access control",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "user_email": {
+                    "type": "string",
+                    "description": "User's email address"
+                },
+                "role": {
+                    "type": "string",
+                    "description": "User role: 'agent' or 'customer'",
+                    "enum": ["agent", "customer"]
+                },
+                "ticket_type": {
+                    "type": "string",
+                    "description": "Ticket type to filter by (e.g., 'IT Request', 'Incident Management', 'ServiceOrderRequest')"
+                },
+                "page": {
+                    "type": "integer",
+                    "description": "Page number for pagination",
+                    "default": 1
+                },
+                "page_size": {
+                    "type": "integer",
+                    "description": "Number of tickets per page",
+                    "default": 15
+                }
+            },
+            "required": ["user_email", "role", "ticket_type"]
+        }
+    ),
+    Tool(
+        name="search_my_tickets",
+        description="Advanced search for tickets with combined filtering by role, type, and status",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "user_email": {
+                    "type": "string",
+                    "description": "User's email address"
+                },
+                "role": {
+                    "type": "string",
+                    "description": "User role: 'agent' or 'customer'",
+                    "enum": ["agent", "customer"]
+                },
+                "ticket_type": {
+                    "type": "string",
+                    "description": "Ticket type to filter by (optional, e.g., 'IT Request', 'Incident Management', 'ServiceOrderRequest')"
+                },
+                "status": {
+                    "type": "string",
+                    "description": "Ticket status to filter by (optional, e.g., 'Registered', 'In progress', 'Resolved', 'Closed')"
+                },
+                "page": {
+                    "type": "integer",
+                    "description": "Page number for pagination",
+                    "default": 1
+                },
+                "page_size": {
+                    "type": "integer",
+                    "description": "Number of tickets per page",
+                    "default": 15
+                }
+            },
+            "required": ["user_email", "role"]
+        }
+    ),
+    Tool(
+        name="create_ticket",
+        description="Create a new IT Request ticket as a customer (user becomes the end user of the ticket)",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "user_email": {
+                    "type": "string",
+                    "description": "User's email address (user will become the end user/customer for this ticket)"
+                },
+                "title": {
+                    "type": "string",
+                    "description": "Ticket title/subject"
+                },
+                "description": {
+                    "type": "string",
+                    "description": "Detailed description of the IT issue or request"
+                },
+                "priority": {
+                    "type": "string",
+                    "description": "Priority level",
+                    "enum": ["Low", "Medium", "High", "Critical"],
+                    "default": "Medium"
+                }
+            },
+            "required": ["user_email", "title", "description"]
         }
     )
 ]
@@ -79,9 +294,494 @@ class NSPMCPConnector:
         except Exception as e:
             logger.error(f"Error calling local API for user {user_email}: {str(e)}")
             return None
+    
+    async def get_tickets_by_role(self, user_email: str, role: str, page: int = 1, page_size: int = 15) -> Dict[str, Any]:
+        """Get tickets based on user role"""
+        data = {
+            "user_email": user_email,
+            "role": role,
+            "page": page,
+            "page_size": page_size
+        }
+        try:
+            result = await self._call_local_api('/api/get_tickets_by_role', data=data)
+            if result and result.get('success'):
+                return result
+            else:
+                logger.error(f"Local API returned unsuccessful response: {result}")
+                return {"success": False, "error": "Failed to get tickets"}
+        except Exception as e:
+            logger.error(f"Error calling local API for tickets (user: {user_email}, role: {role}): {str(e)}")
+            return {"success": False, "error": str(e)}
+    
+    async def get_tickets_by_status(self, status: str, page: int = 1, page_size: int = 15) -> Dict[str, Any]:
+        """Get tickets filtered by status"""
+        data = {
+            "status": status,
+            "page": page,
+            "page_size": page_size
+        }
+        try:
+            result = await self._call_local_api('/api/get_tickets_by_status', data=data)
+            if result and result.get('success'):
+                return result
+            else:
+                logger.error(f"Local API returned unsuccessful response: {result}")
+                return {"success": False, "error": "Failed to get tickets by status"}
+        except Exception as e:
+            logger.error(f"Error calling local API for tickets by status ({status}): {str(e)}")
+            return {"success": False, "error": str(e)}
+    
+    async def get_tickets_by_type(self, ticket_type: str, page: int = 1, page_size: int = 15) -> Dict[str, Any]:
+        """Get tickets filtered by type"""
+        data = {
+            "ticket_type": ticket_type,
+            "page": page,
+            "page_size": page_size
+        }
+        try:
+            result = await self._call_local_api('/api/get_tickets_by_type', data=data)
+            if result and result.get('success'):
+                return result
+            else:
+                logger.error(f"Local API returned unsuccessful response: {result}")
+                return {"success": False, "error": "Failed to get tickets by type"}
+        except Exception as e:
+            logger.error(f"Error calling local API for tickets by type ({ticket_type}): {str(e)}")
+            return {"success": False, "error": str(e)}
+    
+    async def get_tickets_by_role_and_status(self, user_email: str, role: str, status: str, page: int = 1, page_size: int = 15) -> Dict[str, Any]:
+        """Get tickets filtered by both user role and status"""
+        data = {
+            "user_email": user_email,
+            "role": role,
+            "status": status,
+            "page": page,
+            "page_size": page_size
+        }
+        try:
+            result = await self._call_local_api('/api/get_tickets_by_role_and_status', data=data)
+            if result and result.get('success'):
+                return result
+            else:
+                logger.error(f"Local API returned unsuccessful response: {result}")
+                return {"success": False, "error": "Failed to get tickets by role and status"}
+        except Exception as e:
+            logger.error(f"Error calling local API for tickets by role and status: {str(e)}")
+            return {"success": False, "error": str(e)}
+    
+    async def get_tickets_by_role_and_type(self, user_email: str, role: str, ticket_type: str, page: int = 1, page_size: int = 15) -> Dict[str, Any]:
+        """Get tickets filtered by both user role and ticket type"""
+        data = {
+            "user_email": user_email,
+            "role": role,
+            "ticket_type": ticket_type,
+            "page": page,
+            "page_size": page_size
+        }
+        try:
+            result = await self._call_local_api('/api/get_tickets_by_role_and_type', data=data)
+            if result and result.get('success'):
+                return result
+            else:
+                logger.error(f"Local API returned unsuccessful response: {result}")
+                return {"success": False, "error": "Failed to get tickets by role and type"}
+        except Exception as e:
+            logger.error(f"Error calling local API for tickets by role and type: {str(e)}")
+            return {"success": False, "error": str(e)}
+    
+    async def search_tickets_advanced(self, user_email: str, role: str, ticket_type: str = None, status: str = None, page: int = 1, page_size: int = 15) -> Dict[str, Any]:
+        """Advanced search for tickets with combined filtering"""
+        data = {
+            "user_email": user_email,
+            "role": role,
+            "page": page,
+            "page_size": page_size
+        }
+        if ticket_type:
+            data["ticket_type"] = ticket_type
+        if status:
+            data["status"] = status
+            
+        try:
+            result = await self._call_local_api('/api/search_tickets_advanced', data=data)
+            if result and result.get('success'):
+                return result
+            else:
+                logger.error(f"Local API returned unsuccessful response: {result}")
+                return {"success": False, "error": "Failed to search tickets"}
+        except Exception as e:
+            logger.error(f"Error calling local API for advanced ticket search: {str(e)}")
+            return {"success": False, "error": str(e)}
+    
+    async def create_customer_ticket(self, user_email: str, title: str, description: str, priority: str = "Medium") -> Dict[str, Any]:
+        """Create a new IT Request ticket as a customer"""
+        data = {
+            "user_email": user_email,
+            "title": title,
+            "description": description,
+            "priority": priority,
+            "role": "customer"  # Always customer for ticket creation
+        }
+        try:
+            result = await self._call_local_api('/api/create_customer_ticket', data=data)
+            if result and result.get('success'):
+                return result
+            else:
+                logger.error(f"Local API returned unsuccessful response: {result}")
+                return {"success": False, "error": "Failed to create ticket"}
+        except Exception as e:
+            logger.error(f"Error calling local API for ticket creation: {str(e)}")
+            return {"success": False, "error": str(e)}
 
 # Global MCP connector instance
 nsp_connector = NSPMCPConnector()
+
+# User context management functions
+async def get_user_context(user_email: str) -> UserContext:
+    """Get or create user context with caching"""
+    # Check if we have cached user context
+    if user_email in USER_CONTEXT_CACHE:
+        context = USER_CONTEXT_CACHE[user_email]
+        if context.is_cache_valid():
+            logger.info(f"Using cached user context for {user_email}")
+            return context
+        else:
+            logger.info(f"User context cache expired for {user_email}")
+            del USER_CONTEXT_CACHE[user_email]
+    
+    # Fetch fresh user data
+    logger.info(f"Fetching fresh user data for {user_email}")
+    user_data = await nsp_connector.get_user_by_email(user_email)
+    
+    if user_data:
+        context = UserContext(user_data)
+        USER_CONTEXT_CACHE[user_email] = context
+        logger.info(f"Created and cached user context for {user_email} (type: {context.user_type})")
+        return context
+    else:
+        logger.error(f"Failed to get user data for {user_email}")
+        return None
+
+async def call_tool(tool_name: str, arguments: Dict[str, Any], user_email: str = None) -> Dict[str, Any]:
+    """Call a tool with user context validation"""
+    logger.info(f"Calling tool: {tool_name} with arguments: {arguments}")
+    
+    # Get user context if user_email is provided
+    user_context = None
+    if user_email:
+        user_context = await get_user_context(user_email)
+        if not user_context:
+            return {
+                "success": False,
+                "error": f"Kunde inte hitta användarinformation för {user_email}"
+            }
+    
+    if tool_name == "get_my_info":
+        if user_context:
+            result = {
+                "success": True,
+                "data": {
+                    "user_id": user_context.user_id,
+                    "user_type": user_context.user_type,
+                    "display_name": user_context.display_name,
+                    "first_name": user_context.first_name,
+                    "email": user_context.email,
+                    "department": user_context.department,
+                    "job_title": user_context.job_title,
+                    "is_active": user_context.is_active,
+                    "permissions": {
+                        "can_list_own_tickets": user_context.can_list_own_tickets(),
+                        "can_list_assigned_tickets": user_context.can_list_assigned_tickets(),
+                        "can_create_tickets": user_context.can_create_tickets(),
+                        "can_update_tickets": user_context.can_update_tickets(),
+                    },
+                    "greeting": user_context.get_personalized_greeting()
+                }
+            }
+        else:
+            result = {
+                "success": False,
+                "error": "Ingen användarkontext tillgänglig. Kontrollera att du är inloggad."
+            }
+    
+    elif tool_name == "get_my_tickets":
+        if not user_context:
+            return {
+                "success": False,
+                "error": "Användarkontext krävs för att hämta ärenden"
+            }
+        
+        role = arguments.get("role")
+        page = arguments.get("page", 1)
+        page_size = arguments.get("page_size", 15)
+        
+        # Validate role permissions
+        if role == "agent" and not user_context.can_list_assigned_tickets():
+            return {
+                "success": False,
+                "error": "Du har inte behörighet att se tilldelade ärenden som agent"
+            }
+        elif role == "customer" and not user_context.can_list_own_tickets():
+            return {
+                "success": False,
+                "error": "Du har inte behörighet att se dina egna ärenden"
+            }
+        
+        # Call the local API
+        api_result = await nsp_connector.get_tickets_by_role(
+            user_email=user_email,
+            role=role,
+            page=page,
+            page_size=page_size
+        )
+        
+        if api_result.get("success"):
+            # Transform the response to match expected format
+            tickets_data = api_result.get("data", [])
+            pagination = api_result.get("pagination", {})
+            
+            result = {
+                "success": True,
+                "data": {
+                    "Result": tickets_data,
+                    "TotalCount": pagination.get("total_count", 0),
+                    "filter_description": f"Roll: {role}, Användare: {user_email}"
+                }
+            }
+        else:
+            result = api_result
+    
+    elif tool_name == "get_tickets_by_status":
+        if not user_context:
+            return {
+                "success": False,
+                "error": "Användarkontext krävs för att hämta ärenden"
+            }
+        
+        role = arguments.get("role")
+        status = arguments.get("status")
+        page = arguments.get("page", 1)
+        page_size = arguments.get("page_size", 15)
+        
+        if not status:
+            return {
+                "success": False,
+                "error": "Status krävs för att filtrera ärenden"
+            }
+        
+        # Validate role permissions
+        if role == "agent" and not user_context.can_list_assigned_tickets():
+            return {
+                "success": False,
+                "error": "Du har inte behörighet att se tilldelade ärenden som agent"
+            }
+        elif role == "customer" and not user_context.can_list_own_tickets():
+            return {
+                "success": False,
+                "error": "Du har inte behörighet att se dina egna ärenden"
+            }
+        
+        # Call the local API with combined role and status filtering
+        api_result = await nsp_connector.get_tickets_by_role_and_status(
+            user_email=user_email,
+            role=role,
+            status=status,
+            page=page,
+            page_size=page_size
+        )
+        
+        if api_result.get("success"):
+            # Transform the response to match expected format
+            tickets_data = api_result.get("data", [])
+            pagination = api_result.get("pagination", {})
+            
+            result = {
+                "success": True,
+                "data": {
+                    "Result": tickets_data,
+                    "TotalCount": pagination.get("total_count", 0),
+                    "filter_description": f"Roll: {role}, Status: {status}, Användare: {user_email}"
+                }
+            }
+        else:
+            result = api_result
+    
+    elif tool_name == "get_tickets_by_type":
+        if not user_context:
+            return {
+                "success": False,
+                "error": "Användarkontext krävs för att hämta ärenden"
+            }
+        
+        role = arguments.get("role")
+        ticket_type = arguments.get("ticket_type")
+        page = arguments.get("page", 1)
+        page_size = arguments.get("page_size", 15)
+        
+        if not ticket_type:
+            return {
+                "success": False,
+                "error": "Ärendetyp krävs för att filtrera ärenden"
+            }
+        
+        # Validate role permissions
+        if role == "agent" and not user_context.can_list_assigned_tickets():
+            return {
+                "success": False,
+                "error": "Du har inte behörighet att se tilldelade ärenden som agent"
+            }
+        elif role == "customer" and not user_context.can_list_own_tickets():
+            return {
+                "success": False,
+                "error": "Du har inte behörighet att se dina egna ärenden"
+            }
+        
+        # Call the local API with combined role and type filtering
+        api_result = await nsp_connector.get_tickets_by_role_and_type(
+            user_email=user_email,
+            role=role,
+            ticket_type=ticket_type,
+            page=page,
+            page_size=page_size
+        )
+        
+        if api_result.get("success"):
+            # Transform the response to match expected format
+            tickets_data = api_result.get("data", [])
+            pagination = api_result.get("pagination", {})
+            
+            result = {
+                "success": True,
+                "data": {
+                    "Result": tickets_data,
+                    "TotalCount": pagination.get("total_count", 0),
+                    "filter_description": f"Roll: {role}, Typ: {ticket_type}, Användare: {user_email}"
+                }
+            }
+        else:
+            result = api_result
+    
+    elif tool_name == "search_my_tickets":
+        if not user_context:
+            return {
+                "success": False,
+                "error": "Användarkontext krävs för att söka ärenden"
+            }
+        
+        role = arguments.get("role")
+        ticket_type = arguments.get("ticket_type")  # Optional
+        status = arguments.get("status")  # Optional
+        page = arguments.get("page", 1)
+        page_size = arguments.get("page_size", 15)
+        
+        # Validate role permissions
+        if role == "agent" and not user_context.can_list_assigned_tickets():
+            return {
+                "success": False,
+                "error": "Du har inte behörighet att se tilldelade ärenden som agent"
+            }
+        elif role == "customer" and not user_context.can_list_own_tickets():
+            return {
+                "success": False,
+                "error": "Du har inte behörighet att se dina egna ärenden"
+            }
+        
+        # Call the local API with advanced search
+        api_result = await nsp_connector.search_tickets_advanced(
+            user_email=user_email,
+            role=role,
+            ticket_type=ticket_type,
+            status=status,
+            page=page,
+            page_size=page_size
+        )
+        
+        if api_result.get("success"):
+            # Transform the response to match expected format
+            tickets_data = api_result.get("data", [])
+            pagination = api_result.get("pagination", {})
+            
+            # Build filter description
+            filter_parts = [f"Roll: {role}", f"Användare: {user_email}"]
+            if ticket_type:
+                filter_parts.append(f"Typ: {ticket_type}")
+            if status:
+                filter_parts.append(f"Status: {status}")
+            
+            result = {
+                "success": True,
+                "data": {
+                    "Result": tickets_data,
+                    "TotalCount": pagination.get("total_count", 0),
+                    "filter_description": ", ".join(filter_parts)
+                }
+            }
+        else:
+            result = api_result
+    
+    elif tool_name == "create_ticket":
+        if not user_context:
+            return {
+                "success": False,
+                "error": "Användarkontext krävs för att skapa ärenden"
+            }
+        
+        # Note: Anyone can create tickets AS A CUSTOMER (even if they are agents in NSP)
+        # IT staff can create tickets for their own issues by acting as customers
+        
+        # Validate that user has permission to create tickets
+        if not user_context.can_create_tickets():
+            return {
+                "success": False,
+                "error": "Du har inte behörighet att skapa ärenden"
+            }
+        
+        title = arguments.get("title")
+        description = arguments.get("description") 
+        priority = arguments.get("priority", "Medium")
+        
+        if not title or not description:
+            return {
+                "success": False,
+                "error": "Titel och beskrivning krävs för att skapa ärende"
+            }
+        
+        # Call the local API to create customer ticket
+        api_result = await nsp_connector.create_customer_ticket(
+            user_email=user_email,
+            title=title,
+            description=description,
+            priority=priority
+        )
+        
+        if api_result.get("success"):
+            ticket_data = api_result.get("data", {})
+            ticket_id = ticket_data if isinstance(ticket_data, (int, str)) else ticket_data.get("Id", "Unknown")
+            
+            result = {
+                "success": True,
+                "data": {
+                    "ticket_id": ticket_id,
+                    "title": title,
+                    "description": description,
+                    "priority": priority,
+                    "type": "IT Request",
+                    "status": "Registered",
+                    "created_by": user_email,
+                    "message": f"Ärende #{ticket_id} har skapats framgångsrikt som IT Request"
+                }
+            }
+        else:
+            result = api_result
+    
+    else:
+        result = {
+            "success": False,
+            "error": f"Okänt verktyg: {tool_name}"
+        }
+    
+    return result
 
 @app.route(route="mcp", auth_level=func.AuthLevel.FUNCTION)
 async def nsp_mcp_handler(req: func.HttpRequest) -> func.HttpResponse:
@@ -236,60 +936,98 @@ async def nsp_mcp_handler(req: func.HttpRequest) -> func.HttpResponse:
                         mimetype="application/json"
                     )
                 
-                if tool_name == "get_my_info":
-                    user_email = arguments.get("user_email")
-                    if not user_email:
-                        error_response = {
-                            "jsonrpc": "2.0",
-                            "id": request_id,
-                            "error": {"code": -32602, "message": "user_email required"}
-                        }
-                        return func.HttpResponse(
-                            json.dumps(error_response),
-                            status_code=400,
-                            mimetype="application/json"
-                        )
-                    
-                    result = await nsp_connector.get_user_by_email(user_email)
-                    if result:
-                        success_response = {
-                            "jsonrpc": "2.0",
-                            "id": request_id,
-                            "result": {
-                                "content": [
-                                    {
-                                        "type": "text",
-                                        "text": f"User information retrieved: {json.dumps(result, indent=2)}"
-                                    }
-                                ]
-                            }
-                        }
-                        return func.HttpResponse(
-                            json.dumps(success_response),
-                            mimetype="application/json"
-                        )
-                    else:
-                        error_response = {
-                            "jsonrpc": "2.0",
-                            "id": request_id,
-                            "error": {"code": -32603, "message": "User not found"}
-                        }
-                        return func.HttpResponse(
-                            json.dumps(error_response),
-                            status_code=404,
-                            mimetype="application/json"
-                        )
-                else:
+                # Handle all tool calls through the unified call_tool function
+                user_email = arguments.get("user_email")
+                if not user_email:
                     error_response = {
                         "jsonrpc": "2.0",
                         "id": request_id,
-                        "error": {"code": -32601, "message": f"Unknown tool: {tool_name}"}
+                        "error": {"code": -32602, "message": "user_email required"}
                     }
                     return func.HttpResponse(
                         json.dumps(error_response),
                         status_code=400,
                         mimetype="application/json"
                     )
+                
+                # Call the tool with user context
+                result = await call_tool(tool_name, arguments, user_email)
+                
+                if result.get("success"):
+                    # Format successful response for MCP
+                    if tool_name == "get_my_info":
+                        text_content = f"Användarinformation:\n{json.dumps(result['data'], indent=2, ensure_ascii=False)}"
+                    elif tool_name == "create_ticket":
+                        ticket_info = result.get("data", {})
+                        text_content = f"✅ Ärende skapat framgångsrikt!\n\n"
+                        text_content += f"Ärende-ID: {ticket_info.get('ticket_id', 'N/A')}\n"
+                        text_content += f"Titel: {ticket_info.get('title', 'N/A')}\n"
+                        text_content += f"Beskrivning: {ticket_info.get('description', 'N/A')}\n"
+                        text_content += f"Prioritet: {ticket_info.get('priority', 'N/A')}\n"
+                        text_content += f"Typ: {ticket_info.get('type', 'N/A')}\n"
+                        text_content += f"Status: {ticket_info.get('status', 'N/A')}\n"
+                        text_content += f"Skapat av: {ticket_info.get('created_by', 'N/A')}\n\n"
+                        text_content += f"💡 {ticket_info.get('message', 'Ärendet har skapats')}"
+                    elif tool_name in ["get_my_tickets", "get_tickets_by_status", "get_tickets_by_type", "search_my_tickets"]:
+                        tickets_data = result.get("data", {})
+                        tickets = tickets_data.get("Result", [])
+                        total_count = tickets_data.get("TotalCount", 0)
+                        filter_desc = tickets_data.get("filter_description", "")
+                        
+                        text_content = f"Ärenden ({total_count} totalt):\n"
+                        if filter_desc:
+                            text_content += f"Filter: {filter_desc}\n\n"
+                        
+                        if tickets:
+                            for ticket in tickets[:5]:  # Show first 5 tickets
+                                text_content += f"ID: {ticket.get('Id', 'N/A')}\n"
+                                text_content += f"Referens: {ticket.get('ReferenceNo', 'N/A')}\n"
+                                text_content += f"Titel: {ticket.get('BaseHeader', 'N/A')}\n"
+                                text_content += f"Beskrivning: {ticket.get('BaseDescription', 'N/A')[:100]}{'...' if len(ticket.get('BaseDescription', '')) > 100 else ''}\n"
+                                text_content += f"Status: {ticket.get('BaseEntityStatus', 'N/A')}\n"
+                                text_content += f"Typ: {ticket.get('Type', 'N/A')}\n"
+                                text_content += f"Prioritet: {ticket.get('Priority', 'N/A')}\n"
+                                text_content += f"Skapad: {ticket.get('CreatedDate', 'N/A')}\n"
+                                text_content += f"Skapad av: {ticket.get('CreatedBy', 'N/A')}\n"
+                                text_content += f"Tilldelad till: {ticket.get('BaseAgent', 'N/A')}\n"
+                                text_content += f"Slutanvändare: {ticket.get('BaseEndUser', 'N/A')}\n"
+                                text_content += "---\n"
+                            
+                            if total_count > 5:
+                                text_content += f"\n... och {total_count - 5} fler ärenden"
+                        else:
+                            text_content += "Inga ärenden hittades."
+                    else:
+                        text_content = f"Resultat: {json.dumps(result['data'], indent=2, ensure_ascii=False)}"
+                    
+                    success_response = {
+                        "jsonrpc": "2.0",
+                        "id": request_id,
+                        "result": {
+                            "content": [
+                                {
+                                    "type": "text",
+                                    "text": text_content
+                                }
+                            ]
+                        }
+                    }
+                    return func.HttpResponse(
+                        json.dumps(success_response),
+                        mimetype="application/json"
+                    )
+                else:
+                    error_response = {
+                        "jsonrpc": "2.0",
+                        "id": request_id,
+                        "error": {"code": -32603, "message": result.get("error", "Unknown error")}
+                    }
+                    return func.HttpResponse(
+                        json.dumps(error_response),
+                        status_code=400,
+                        mimetype="application/json"
+                    )
+
             
             else:
                 logger.error(f"Unknown method received: {method}")

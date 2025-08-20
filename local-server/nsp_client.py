@@ -514,6 +514,55 @@ class NSPClient:
                                  sort_by=sort_by, sort_direction=sort_direction,
                                  ticket_types=ticket_types)
     
+    def get_it_tickets_by_specific_status(self, status: str, page: int = 1, page_size: int = 15,
+                                         sort_by: str = "CreatedDate", sort_direction: str = "desc",
+                                         ticket_types: Optional[List[str]] = None) -> Dict[str, Any]:
+        """
+        Get IT-related tickets filtered by specific status name.
+        
+        Args:
+            status: Specific status name (e.g., 'Registered', 'In progress', 'Resolved', 'Closed')
+            page: Page number for pagination
+            page_size: Number of tickets per page
+            sort_by: Field to sort by
+            sort_direction: Sort direction ('asc' or 'desc')
+            ticket_types: List of specific ticket types to include. If None, includes all IT types
+        """
+        # Map common status names to their IDs (based on typical NSP setup)
+        status_mapping = {
+            'New': 1,
+            'Registered': 1,
+            'Assigned': 3,
+            'In progress': 6,
+            'In Progress': 6,
+            'Pending': 9,
+            'Resolved': 10,
+            'Closed': 11
+        }
+        
+        # Try to get status ID from mapping
+        status_id = status_mapping.get(status)
+        if status_id is None:
+            # Try to get from dynamic lookup if available
+            try:
+                all_statuses = self.get_entity_status_ids()
+                status_id = all_statuses.get(status.lower())
+            except:
+                pass
+        
+        if status_id is None:
+            raise ValueError(f"Unknown status: {status}. Available statuses: {', '.join(status_mapping.keys())}")
+        
+        # Build status filter
+        status_filter = {
+            "BaseEntityStatus": [status_id]
+        }
+        
+        # Get IT tickets with status filter and ticket type filtering
+        return self.get_it_tickets(page=page, page_size=page_size, filters=status_filter,
+                                 sort_by=sort_by, sort_direction=sort_direction,
+                                 ticket_types=ticket_types)
+    
     def search_entities(self, entity_type: str, query: str, page: int = 1, page_size: int = 15,
                        sort_by: str = "CreatedDate", sort_direction: str = "desc") -> Dict[str, Any]:
         """Search among entities with workaround for SortOrder issue and customizable sorting"""
@@ -744,6 +793,160 @@ class NSPClient:
         
         # Get IT tickets with the user filter and specified ticket types
         return self.get_it_tickets(page=page, page_size=page_size, filters=filters, 
+                                 sort_by=sort_by, sort_direction=sort_direction,
+                                 ticket_types=ticket_types)
+    
+    def get_tickets_by_user_role_and_status(self, user_email: str, role: str = "customer", status: str = "Registered",
+                                           page: int = 1, page_size: int = 15, sort_by: str = "CreatedDate", 
+                                           sort_direction: str = "desc") -> Dict[str, Any]:
+        """
+        Get IT-related tickets filtered by user role and specific status.
+        
+        Args:
+            user_email: Email of the user to filter tickets for
+            role: User role - 'customer' or 'agent'
+            status: Specific status name (e.g., 'Registered', 'In progress', 'Resolved', 'Closed')
+            page: Page number for pagination
+            page_size: Number of tickets per page
+            sort_by: Field to sort by
+            sort_direction: Sort direction ('asc' or 'desc')
+        """
+        # First get user information
+        user = self.get_user_by_email(user_email)
+        if not user:
+            raise Exception(f"User not found: {user_email}")
+        
+        user_id = user.get('Id')
+        
+        # Create role-based filters
+        filters = {}
+        if role.lower() == "customer":
+            filters["BaseEndUser"] = user_id
+        elif role.lower() == "agent":
+            filters["BaseAgent"] = user_id
+        else:
+            raise ValueError(f"Invalid role: {role}. Must be 'customer' or 'agent'")
+        
+        # Add status filter using the specific status method
+        status_mapping = {
+            'New': 1, 'Registered': 1, 'Assigned': 3, 'In progress': 6, 'In Progress': 6,
+            'Pending': 9, 'Resolved': 10, 'Closed': 11
+        }
+        
+        status_id = status_mapping.get(status)
+        if status_id is None:
+            # Try dynamic lookup
+            try:
+                all_statuses = self.get_entity_status_ids()
+                status_id = all_statuses.get(status.lower())
+            except:
+                pass
+        
+        if status_id is None:
+            raise ValueError(f"Unknown status: {status}. Available statuses: {', '.join(status_mapping.keys())}")
+        
+        filters["BaseEntityStatus"] = status_id
+        
+        # Get IT tickets with combined filters
+        return self.get_it_tickets(page=page, page_size=page_size, filters=filters,
+                                 sort_by=sort_by, sort_direction=sort_direction)
+    
+    def get_tickets_by_user_role_and_type(self, user_email: str, role: str = "customer", ticket_type: str = "IT Request",
+                                         page: int = 1, page_size: int = 15, sort_by: str = "CreatedDate", 
+                                         sort_direction: str = "desc") -> Dict[str, Any]:
+        """
+        Get IT-related tickets filtered by user role and specific ticket type.
+        
+        Args:
+            user_email: Email of the user to filter tickets for
+            role: User role - 'customer' or 'agent'
+            ticket_type: Specific ticket type (e.g., 'IT Request', 'ServiceOrderRequest', 'Incident Management')
+            page: Page number for pagination
+            page_size: Number of tickets per page
+            sort_by: Field to sort by
+            sort_direction: Sort direction ('asc' or 'desc')
+        """
+        # First get user information
+        user = self.get_user_by_email(user_email)
+        if not user:
+            raise Exception(f"User not found: {user_email}")
+        
+        user_id = user.get('Id')
+        
+        # Create role-based filters
+        filters = {}
+        if role.lower() == "customer":
+            filters["BaseEndUser"] = user_id
+        elif role.lower() == "agent":
+            filters["BaseAgent"] = user_id
+        else:
+            raise ValueError(f"Invalid role: {role}. Must be 'customer' or 'agent'")
+        
+        # Get IT tickets with combined filters and specific ticket type
+        return self.get_it_tickets(page=page, page_size=page_size, filters=filters,
+                                 sort_by=sort_by, sort_direction=sort_direction,
+                                 ticket_types=[ticket_type])
+    
+    def search_tickets_by_user_role(self, user_email: str, role: str = "customer", ticket_type: str = None, 
+                                   status: str = None, page: int = 1, page_size: int = 15, 
+                                   sort_by: str = "CreatedDate", sort_direction: str = "desc") -> Dict[str, Any]:
+        """
+        Advanced search for IT-related tickets with combined filtering by user role, ticket type, and status.
+        
+        Args:
+            user_email: Email of the user to filter tickets for
+            role: User role - 'customer' or 'agent'
+            ticket_type: Optional specific ticket type (e.g., 'IT Request', 'ServiceOrderRequest', 'Incident Management')
+            status: Optional specific status name (e.g., 'Registered', 'In progress', 'Resolved', 'Closed')
+            page: Page number for pagination
+            page_size: Number of tickets per page
+            sort_by: Field to sort by
+            sort_direction: Sort direction ('asc' or 'desc')
+        """
+        # First get user information
+        user = self.get_user_by_email(user_email)
+        if not user:
+            raise Exception(f"User not found: {user_email}")
+        
+        user_id = user.get('Id')
+        
+        # Create role-based filters
+        filters = {}
+        if role.lower() == "customer":
+            filters["BaseEndUser"] = user_id
+        elif role.lower() == "agent":
+            filters["BaseAgent"] = user_id
+        else:
+            raise ValueError(f"Invalid role: {role}. Must be 'customer' or 'agent'")
+        
+        # Add status filter if provided
+        if status:
+            status_mapping = {
+                'New': 1, 'Registered': 1, 'Assigned': 3, 'In progress': 6, 'In Progress': 6,
+                'Pending': 9, 'Resolved': 10, 'Closed': 11
+            }
+            
+            status_id = status_mapping.get(status)
+            if status_id is None:
+                # Try dynamic lookup
+                try:
+                    all_statuses = self.get_entity_status_ids()
+                    status_id = all_statuses.get(status.lower())
+                except:
+                    pass
+            
+            if status_id is None:
+                raise ValueError(f"Unknown status: {status}. Available statuses: {', '.join(status_mapping.keys())}")
+            
+            filters["BaseEntityStatus"] = status_id
+        
+        # Determine ticket types to include
+        ticket_types = None
+        if ticket_type:
+            ticket_types = [ticket_type]
+        
+        # Get IT tickets with combined filters
+        return self.get_it_tickets(page=page, page_size=page_size, filters=filters,
                                  sort_by=sort_by, sort_direction=sort_direction,
                                  ticket_types=ticket_types)
     
